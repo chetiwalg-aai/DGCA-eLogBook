@@ -6,7 +6,7 @@
 (function () {
   'use strict';
 
-  const { COL, DUTY_TYPE, normaliseTime, getInstructorAtcol } = window.__DGCA__;
+  const { COL, DUTY_TYPE, normaliseTime, getAtcol } = window.__DGCA__;
 
   let _offset = 0;
   let _selectedRows = {};
@@ -26,52 +26,56 @@
   }
 
   function detectDutyTypeFromRow(tr) {
-    if (cellText(tr, COL.CTIME_FROM))  return DUTY_TYPE.CONTROLLING;
-    if (cellText(tr, COL.PTIME_FROM))  return DUTY_TYPE.OJT_INSTR_PRACTICAL;
-    if (cellText(tr, COL.TTIME_FROM))  return DUTY_TYPE.OJT_INSTR_THEORY;
-    if (cellText(tr, COL.OTIME_FROM))  return DUTY_TYPE.OJT_TRAINING_THEORY;
+    if (cellText(tr, COL.CTIME_FROM)) return DUTY_TYPE.CONTROLLING;
+    if (cellText(tr, COL.PTIME_FROM)) return DUTY_TYPE.OJT_INSTR_PRACTICAL;
+    if (cellText(tr, COL.TTIME_FROM)) return DUTY_TYPE.OJT_INSTR_THEORY;
+    if (cellText(tr, COL.OTIME_FROM)) return DUTY_TYPE.OJT_TRAINING_THEORY;
     if (cellText(tr, COL.OPTIME_FROM)) return DUTY_TYPE.OJT_TRAINING_PRACTICAL;
     return DUTY_TYPE.CONTROLLING;
   }
 
   function getTimesForDuty(tr, dutyType) {
     const map = {
-      [DUTY_TYPE.CONTROLLING]:            [COL.CTIME_FROM,  COL.CTIME_TO,  COL.CTIME_TOTAL],
-      [DUTY_TYPE.OJT_INSTR_PRACTICAL]:    [COL.PTIME_FROM,  COL.PTIME_TO,  COL.PTIME_TOTAL],
-      [DUTY_TYPE.OJT_INSTR_THEORY]:       [COL.TTIME_FROM,  COL.TTIME_TO,  COL.TTIME_TOTAL],
-      [DUTY_TYPE.OJT_TRAINING_THEORY]:    [COL.OTIME_FROM,  COL.OTIME_TO,  COL.OTIME_TOTAL],
+      [DUTY_TYPE.CONTROLLING]: [COL.CTIME_FROM, COL.CTIME_TO, COL.CTIME_TOTAL],
+      [DUTY_TYPE.OJT_INSTR_PRACTICAL]: [COL.PTIME_FROM, COL.PTIME_TO, COL.PTIME_TOTAL],
+      [DUTY_TYPE.OJT_INSTR_THEORY]: [COL.TTIME_FROM, COL.TTIME_TO, COL.TTIME_TOTAL],
+      [DUTY_TYPE.OJT_TRAINING_THEORY]: [COL.OTIME_FROM, COL.OTIME_TO, COL.OTIME_TOTAL],
       [DUTY_TYPE.OJT_TRAINING_PRACTICAL]: [COL.OPTIME_FROM, COL.OPTIME_TO, COL.OPTIME_TOTAL],
     };
     const cols = map[dutyType];
     if (!cols) return { from: '', to: '', total: '' };
     return {
-      from:  normaliseTime(cellText(tr, cols[0])),
-      to:    normaliseTime(cellText(tr, cols[1])),
+      from: normaliseTime(cellText(tr, cols[0])),
+      to: normaliseTime(cellText(tr, cols[1])),
       total: normaliseTime(cellText(tr, cols[2])),
     };
   }
 
   function parseRow(tr) {
     const dutyType = detectDutyTypeFromRow(tr);
-    const times    = getTimesForDuty(tr, dutyType);
-    const date     = cellText(tr, COL.DATE);
-    const station  = cellText(tr, COL.STATION);
+    const times = getTimesForDuty(tr, dutyType);
+    const date = cellText(tr, COL.DATE);
+    const station = cellText(tr, COL.STATION);
     const nameOjti = cellText(tr, COL.NAME_OJTI);
+    const pNameTrainee = cellText(tr, COL.PNAME);
+    const tNameTrainee = cellText(tr, COL.TNAME);
 
     return {
       id: rowId(date, station, times.from, times.to, dutyType),
       date, station,
-      atsUnit:        cellText(tr, COL.ATS_UNIT),
-      remarks:        cellText(tr, COL.REMARKS),
-      nameOjti:       nameOjti,
-      instructorAtcol: getInstructorAtcol(nameOjti),  // ← NEW: resolved ATCOL
-      pNameTrainee:   cellText(tr, COL.PNAME),
-      tNameTrainee:   cellText(tr, COL.TNAME),
-      noDays:         cellText(tr, COL.NO_DAYS),
+      atsUnit: cellText(tr, COL.ATS_UNIT),
+      remarks: cellText(tr, COL.REMARKS),
+      nameOjti: nameOjti,
+      instructorAtcol: getAtcol(nameOjti),
+      pNameTrainee: pNameTrainee,
+      tNameTrainee: tNameTrainee,
+      theoryTraineeAtcol: getAtcol(tNameTrainee),
+      practicalTraineeAtcol: getAtcol(pNameTrainee),
+      noDays: cellText(tr, COL.NO_DAYS),
       dutyType,
-      timeFrom:       times.from,
-      timeTo:         times.to,
-      timeTotal:      times.total,
+      timeFrom: times.from,
+      timeTo: times.to,
+      timeTotal: times.total,
     };
   }
 
@@ -215,13 +219,13 @@
     chrome.storage.session.get(['dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors'])
       .then((data) => {
         const pendingRows = data?.dgca_pending_rows || [];
-        const statuses    = data?.dgca_row_status   || [];
-        const errors      = data?.dgca_row_errors   || {};
+        const statuses = data?.dgca_row_status || [];
+        const errors = data?.dgca_row_errors || {};
 
         tableBody.querySelectorAll('tr').forEach(tr => {
           if (!isDataRow(tr)) return;
           _offset = 1;
-          const date    = cellText(tr, COL.DATE);
+          const date = cellText(tr, COL.DATE);
           const station = cellText(tr, COL.STATION);
           const matchIdx = pendingRows.findIndex(r => r.date === date && r.station === station);
           if (matchIdx < 0) return;
@@ -238,7 +242,7 @@
           applyStatusToCell(statusTd, status, errors[matchIdx], matchIdx);
         });
       })
-      .catch(() => {});
+      .catch(() => { });
   }
 
   function applyStatusToCell(td, status, errorMsg, index) {
@@ -275,13 +279,13 @@
     const indexed = rows.map((row, i) => ({
       row,
       status: statuses[i] || 'pending',
-      error:  errors[i]   || null,
-      key:    rowSortKey(row),
+      error: errors[i] || null,
+      key: rowSortKey(row),
     }));
     indexed.sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
-    const sortedRows     = indexed.map(x => x.row);
+    const sortedRows = indexed.map(x => x.row);
     const sortedStatuses = indexed.map(x => x.status);
-    const sortedErrors   = {};
+    const sortedErrors = {};
     indexed.forEach((x, i) => { if (x.error) sortedErrors[i] = x.error; });
     return { rows: sortedRows, statuses: sortedStatuses, errors: sortedErrors };
   }
@@ -295,9 +299,9 @@
 
     chrome.storage.session.get(['dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors'])
       .then((data) => {
-        const existing       = data?.dgca_pending_rows || [];
-        const existingStatus = data?.dgca_row_status   || [];
-        const existingErrors = data?.dgca_row_errors   || {};
+        const existing = data?.dgca_pending_rows || [];
+        const existingStatus = data?.dgca_row_status || [];
+        const existingErrors = data?.dgca_row_errors || {};
         const existingMap = {};
         existing.forEach((r, i) => { existingMap[r.id] = { row: r, index: i }; });
 
@@ -307,16 +311,16 @@
           return;
         }
 
-        const rawMerged   = [...existing, ...toAdd];
+        const rawMerged = [...existing, ...toAdd];
         const rawStatuses = [...existingStatus, ...toAdd.map(() => 'pending')];
         const { rows: merged, statuses: mergedStatus, errors: mergedErrors } =
           sortQueue(rawMerged, rawStatuses, existingErrors);
 
         return chrome.storage.session.set({
           dgca_pending_rows: merged,
-          dgca_row_status:   mergedStatus,
-          dgca_row_errors:   mergedErrors,
-          dgca_session_ts:   Date.now(),
+          dgca_row_status: mergedStatus,
+          dgca_row_errors: mergedErrors,
+          dgca_session_ts: Date.now(),
         }).then(() => {
           chrome.runtime.sendMessage({ type: 'ROWS_QUEUED', count: merged.length });
           const btn = document.getElementById('dgca-send-btn');
@@ -344,7 +348,7 @@
   }
 
   let _mutationObserver = null;
-  let _debounceTimer    = null;
+  let _debounceTimer = null;
 
   function startObserving(tableBody) {
     if (_mutationObserver) _mutationObserver.disconnect();

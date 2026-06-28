@@ -1,26 +1,6 @@
 /**
  * dgca-filler.js  (v2.2.0)
  * Runs on: https://www.dgca.gov.in/*
- *
- * KEY CHANGES FROM v2.1:
- *  1. NO forced data entry — every cascading dropdown is waited for via
- *     waitForSelectOptions() before filling; the script only fills what
- *     the page makes available.
- *  2. All fixed sleep() timing replaced with smart waitFor* helpers.
- *  3. Correcterd selectors / IDs verified against the live portal HTML:
- *     - "Knowledge" is a CHECKBOX (#isTheoryClasses), NOT a dropdown.
- *     - "OJT Provided" (#isOjtProvided) is inside #ojtProvidedfields
- *       which is always visible when typeOfDutyId="2" (Instruction).
- *     - #examinerLicenseNumber lives in #examinerLicenseNumberDiv
- *       which only shows when certain duty sub-type is selected.
- *     - ojtFields div is shown/hidden by fnShowOjTFields() after
- *       typeOfDutyId change — we wait for it to be visible.
- *  4. Post-Add verification: counts rows in #anssELogBookDtlsVOList tbody
- *     before & after Add click; if count doesn't increase the add failed.
- *  5. selectpicker-aware setter: updates both the native <select> and
- *     calls jQuery selectpicker('val', …) so the portal's JS sees the
- *     change correctly.
- *  6. SKILL_ASSESSMENT maps to duty '6' (Skill test) — correct per portal.
  */
 (function () {
   'use strict';
@@ -35,34 +15,34 @@
   // ── Selectors (all verified against portal HTML) ─────────────────────────────
   const SEL = {
     briefingCheckbox: '#isbriefingDone',
-    fromDate:         '#logBookDate',
-    toDate:           '#logBookEndDate',
-    postingStation:   '#postingStation',
-    wsoEgcaId:        '#atStoEgcaId',
-    ratingId:         '#ratingId',
-    atsUnitId:        '#atsUnitId',
-    typeOfDutyId:     '#typeOfDutyId',
+    fromDate: '#logBookDate',
+    toDate: '#logBookEndDate',
+    postingStation: '#postingStation',
+    wsoEgcaId: '#atStoEgcaId',
+    ratingId: '#ratingId',
+    atsUnitId: '#atsUnitId',
+    typeOfDutyId: '#typeOfDutyId',
     // Sub-fields inside #ojtFields (visible only for duty types 2,3,4,5,6)
-    ojtFieldsDiv:     '#ojtFields',
-    ojtEnv:           '#ojtOprEnvSmlation',       // Operational Environment/Simulation
-    ojtTrainerName:   '#ojtTrainerName',           // Name of OJTI/Trainer/Examiner (text)
+    ojtFieldsDiv: '#ojtFields',
+    ojtEnv: '#ojtOprEnvSmlation',       // Operational Environment/Simulation
+    ojtTrainerName: '#ojtTrainerName',           // Name of OJTI/Trainer/Examiner (text)
     // Inside #examinerLicenseNumberDiv (shown when examiner ATCOL is required)
-    examinerLicNumDiv:'#examinerLicenseNumberDiv',
-    examinerAtcol:    '#examinerLicenseNumber',    // Instructor/Examiner ATCOL No.
+    examinerLicNumDiv: '#examinerLicenseNumberDiv',
+    examinerAtcol: '#examinerLicenseNumber',    // Instructor/Examiner ATCOL No.
     // Inside #traineeLicenseNumberDiv
     traineeLicNumDiv: '#traineeLicenseNumberDiv',
-    traineeAtcol:     '#traineeLicenseNumber',     // Trainee ATCOL No.
+    traineeAtcol: '#traineeLicenseNumber',     // Trainee ATCOL No.
     // Checkboxes inside ojtFields
-    isProficiency:    '#isProficiencyChecked',     // Proficiency Check (Examiner)
-    isTheoryClasses:  '#isTheoryClasses',          // Knowledge (Instruction theory)
-    isSkillTest:      '#isSkillTestChecked',        // Skill Test (Examiner)
-    isOjtProvided:    '#isOjtProvided',            // OJT Provided (Instruction practical)
+    isProficiency: '#isProficiencyChecked',     // Proficiency Check (Examiner)
+    isTheoryClasses: '#isTheoryClasses',          // Knowledge (Instruction theory)
+    isSkillTest: '#isSkillTestChecked',        // Skill Test (Examiner)
+    isOjtProvided: '#isOjtProvided',            // OJT Provided (Instruction practical)
     // Times
-    startTime:        '#ojtStartTime',
-    endTime:          '#ojtEndTime',
+    startTime: '#ojtStartTime',
+    endTime: '#ojtEndTime',
     // Add button & result table
-    addButton:        '#btnAddanssTrnTrainingDtlsVOList',
-    resultTable:      '#anssELogBookDtlsVOList',
+    addButton: '#btnAddanssTrnTrainingDtlsVOList',
+    resultTable: '#anssELogBookDtlsVOList',
   };
 
   // ── Alert detection ──────────────────────────────────────────────────────────
@@ -195,7 +175,7 @@
     el.value = value;
     // Fire native events first
     el.dispatchEvent(new Event('change', { bubbles: true }));
-    el.dispatchEvent(new Event('input',  { bubbles: true }));
+    el.dispatchEvent(new Event('input', { bubbles: true }));
 
     // Then update the selectpicker widget
     if (window.jQuery) {
@@ -218,9 +198,9 @@
   async function setDatePickerValue(selector, dateStr) {
     const el = await waitForSelector(selector);
     el.value = dateStr;
-    el.dispatchEvent(new Event('input',  { bubbles: true }));
+    el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
-    el.dispatchEvent(new Event('blur',   { bubbles: true }));
+    el.dispatchEvent(new Event('blur', { bubbles: true }));
     // Run onblur handler if present (portal uses inline onblur="checkdate(…)")
     if (el.onblur) {
       try { el.onblur(); } catch (_) { }
@@ -238,9 +218,9 @@
     el.dispatchEvent(new Event('focus', { bubbles: true }));
     await sleep(30);
     el.value = String(text);
-    el.dispatchEvent(new Event('input',  { bubbles: true }));
+    el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
-    el.dispatchEvent(new Event('blur',   { bubbles: true }));
+    el.dispatchEvent(new Event('blur', { bubbles: true }));
     // Trigger the inline onblur (checkTime / setTotalTimeDuration)
     if (el.onblur) {
       try { el.onblur(); } catch (_) { }
@@ -303,7 +283,7 @@
           const el = document.querySelector(sel);
           if (!el) continue;
           el.value = '';
-          el.dispatchEvent(new Event('input',  { bubbles: true }));
+          el.dispatchEvent(new Event('input', { bubbles: true }));
           el.dispatchEvent(new Event('change', { bubbles: true }));
         }
         for (const sel of [SEL.startTime, SEL.endTime, SEL.examinerAtcol, SEL.traineeAtcol]) {
@@ -311,7 +291,7 @@
           if (!el) continue;
           el.value = '';
           el.dispatchEvent(new Event('input', { bubbles: true }));
-          el.dispatchEvent(new Event('blur',  { bubbles: true }));
+          el.dispatchEvent(new Event('blur', { bubbles: true }));
         }
         await sleep(300);
       }
@@ -325,19 +305,19 @@
       timeFrom, timeTo, dutyType, nameOjti,
     } = row;
 
-    const instructorAtcol = row.instructorAtcol || window.__DGCA__.getInstructorAtcol(nameOjti);
+    const instructorAtcol = row.instructorAtcol || window.__DGCA__.getAtcol(nameOjti);
 
-    const stationCode       = String(station || 'VIJP').trim().toUpperCase();
-    const atsUnitRaw        = String(atsUnit  || 'ADC').trim().toUpperCase();
+    const stationCode = String(station || 'VIJP').trim().toUpperCase();
+    const atsUnitRaw = String(atsUnit || 'ADC').trim().toUpperCase();
     const postingStationVal = getStationValue(stationCode);
-    const ratingVal         = getRatingValue(atsUnitRaw);
-    const wsoVal            = getWsoValue(stationCode, useAts);
-    const atsUnitVal        = resolveAtsUnit(remarks, stationCode);
-    const typeOfDutyVal     = getTypeOfDuty(dutyType);
+    const ratingVal = getRatingValue(atsUnitRaw);
+    const wsoVal = getWsoValue(stationCode, useAts);
+    const atsUnitVal = resolveAtsUnit(remarks, stationCode);
+    const typeOfDutyVal = getTypeOfDuty(dutyType);
 
     const { d, m, y } = parseDateDMY(date);
     const fromDateStr = formatDDMMYYYY(d, m, y);
-    const toDateStr   = (timeTo === '00:00')
+    const toDateStr = (timeTo === '00:00')
       ? (() => { const n = addOneDay(d, m, y); return formatDDMMYYYY(n.d, n.m, n.y); })()
       : fromDateStr;
 
@@ -346,7 +326,7 @@
 
     // ── 2–3. Dates ───────────────────────────────────────────────────────────
     await setDatePickerValue(SEL.fromDate, fromDateStr);
-    await setDatePickerValue(SEL.toDate,   toDateStr);
+    await setDatePickerValue(SEL.toDate, toDateStr);
 
     // ── 4. Posting Station → triggers AJAX to populate WSO + Rating + ATS Unit
     await selectByValue(SEL.postingStation, postingStationVal);
@@ -409,15 +389,17 @@
     }
 
     if (dutyType === DUTY_TYPE.OJT_INSTR_PRACTICAL) {
-      // Instructor providing OJT — duty='2', tick "OJT Provided" checkbox
+      // Instructor providing OJT — duty='2', tick "OJT Provided" checkbox  
       // The isOjtProvided checkbox is inside #ojtProvidedfields which is always
       // visible when duty=2; clicking it fires fnSHowOJTFields1() to show
       // examinerLicenseNumberDiv (confusingly named — holds trainee's info here)
       await ensureCheckbox(SEL.isOjtProvided, true);
       // Wait for examinerLicenseNumberDiv to appear (fnSHowOJTFields1 shows it)
-      if (instructorAtcol) {
-        await waitForVisible(SEL.examinerLicNumDiv);
-        await typeIntoField(SEL.examinerAtcol, instructorAtcol);
+      const traineeAtcol = row.practicalTraineeAtcol || window.__DGCA__.getAtcol(row.pNameTrainee);
+
+      if (traineeAtcol) {
+        await waitForVisible(SEL.traineeLicNumDiv);
+        await typeIntoField(SEL.traineeAtcol, traineeAtcol);
       }
     }
 
@@ -467,7 +449,7 @@
 
     // ── 10. Times (always required) ──────────────────────────────────────────
     await typeIntoField(SEL.startTime, timeFrom);
-    await typeIntoField(SEL.endTime,   timeTo);
+    await typeIntoField(SEL.endTime, timeTo);
 
     // Small pause to let setTotalTimeDuration() fire
     await sleep(300);
@@ -492,8 +474,8 @@
 
     // Phase 1: watch for alerts (portal fires these on validation failure)
     const ALERT_WINDOW_MS = 4000;
-    const ALERT_POLL_MS   = 150;
-    const alertDeadline   = Date.now() + ALERT_WINDOW_MS;
+    const ALERT_POLL_MS = 150;
+    const alertDeadline = Date.now() + ALERT_WINDOW_MS;
     let alertText = null;
 
     while (Date.now() < alertDeadline) {
@@ -510,7 +492,7 @@
     // Phase 2: verify the row was actually added to the table
     // Give the portal up to 3 s to append the new row
     const VERIFY_TIMEOUT_MS = 3000;
-    const verifyDeadline    = Date.now() + VERIFY_TIMEOUT_MS;
+    const verifyDeadline = Date.now() + VERIFY_TIMEOUT_MS;
     let rowsAfter = rowsBefore;
 
     while (Date.now() < verifyDeadline) {
@@ -538,25 +520,25 @@
 
   // ── Main session loop ────────────────────────────────────────────────────────
   let _sessionRunning = false;
-  let _aborted        = false;
+  let _aborted = false;
 
   async function runSession(rows) {
     _sessionRunning = true;
-    _aborted        = false;
+    _aborted = false;
 
     const statuses = rows.map(() => 'pending');
-    const errors   = {};
+    const errors = {};
 
     const _atsData = await chrome.storage.session.get(['dgca_use_ats']).catch(() => ({}));
-    const useAts   = !!(_atsData?.dgca_use_ats);
+    const useAts = !!(_atsData?.dgca_use_ats);
 
     await chrome.storage.session.set({ dgca_row_status: statuses });
 
     for (let i = 0; i < rows.length; i++) {
       if (_aborted) break;
 
-      const row    = rows[i];
-      statuses[i]  = 'filling';
+      const row = rows[i];
+      statuses[i] = 'filling';
       await chrome.storage.session.set({ dgca_row_status: [...statuses] });
       sendProgress({ index: i, total: rows.length, status: 'filling', row });
 
@@ -579,12 +561,12 @@
           sendProgress({ index: i, total: rows.length, status: 'submitted' });
         } else {
           statuses[i] = 'error';
-          errors[i]   = result.error;
+          errors[i] = result.error;
           sendProgress({ index: i, total: rows.length, status: 'error', error: result.error });
         }
       } catch (err) {
         statuses[i] = 'error';
-        errors[i]   = err.message;
+        errors[i] = err.message;
         sendProgress({ index: i, total: rows.length, status: 'error', error: err.message });
       }
 
@@ -595,7 +577,7 @@
     }
 
     _sessionRunning = false;
-    const done   = statuses.filter(s => s === 'submitted').length;
+    const done = statuses.filter(s => s === 'submitted').length;
     const errCnt = statuses.filter(s => s === 'error').length;
     sendProgress({ type: 'session-complete', total: rows.length, done, errors: errCnt });
   }
@@ -615,7 +597,7 @@
         .catch(err => sendProgress({ type: 'session-error', error: err.message }));
       sendResponse({ ok: true });
     } else if (msg.type === 'ABORT_SESSION') {
-      _aborted        = true;
+      _aborted = true;
       _sessionRunning = false;
       sendResponse({ ok: true });
     } else if (msg.type === 'PING') {

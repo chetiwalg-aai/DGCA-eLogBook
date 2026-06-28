@@ -223,7 +223,7 @@
   function getTypeOfDuty(dutyType) {
     return TYPE_OF_DUTY_MAP[dutyType] || '1';
   }
-  function getInstructorAtcol(name) {
+  function getAtcol(name) {
     if (!name) return '';
     return INSTRUCTOR_ATCOL_MAP[String(name).trim().toLowerCase()] || '';
   }
@@ -263,7 +263,7 @@
     STATION_MAP, RATING_MAP, WSO_MAP, ATS_UNIT_MAP, STATION_ATS_UNIT_MAP,
     TYPE_OF_DUTY_MAP, INSTRUCTOR_ATCOL_MAP,
     resolveAtsUnit, getStationValue, getRatingValue, getWsoValue,
-    getTypeOfDuty, getInstructorAtcol,
+    getTypeOfDuty, getAtcol,
     parseDateDMY, formatDDMMYYYY, addOneDay, normaliseTime, sleep,
   };
 })();
