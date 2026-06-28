@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>DGCA eLogBook</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <header>
+    <span class="logo">✈ DGCA eLogBook</span>
+    <span id="badge" class="badge badge--idle">Idle</span>
+  </header>
+
+  <!-- Collapsible instructions -->
+  <div class="card" style="margin-top:10px;">
+    <details class="instructions-toggle">
+      <summary class="instructions-summary">How to use ▸</summary>
+      <div class="hint" style="margin-top:8px;">
+        <strong>1.</strong> Go to <a href="https://iamatc.aai.aero/atc/MyLogBook" target="_blank">AAI MyLogBook</a><br>
+        <strong>2.</strong> Check rows you want to send<br>
+        <strong>3.</strong> Click "✈ Add to Queue ▶"<br>
+        <strong>4.</strong> Log into DGCA portal in the DGCA tab<br>
+        <strong>5.</strong> Navigate to the logbook entry page<br>
+        <strong>6.</strong> Come back here and click Start Filling
+      </div>
+    </details>
+  </div>
+
+  <!-- Queue section (preview removed) -->
+  <div class="card" id="queue-section" style="display:none;">
+    <div class="queue-info">
+      <span class="queue-count" id="queue-count">0 rows queued</span>
+      <button id="btn-clear-success" class="btn btn--ghost-success btn--sm" title="Remove successfully submitted rows from queue">✓ Clear Done</button>
+      <button id="btn-clear" class="btn btn--ghost btn--sm" title="Clear entire queue">Clear All</button>
+    </div>
+
+    <!-- WSO toggle -->
+    <div class="wso-toggle">
+      <input type="checkbox" id="wso-ats-toggle">
+      <label for="wso-ats-toggle" id="wso-ats-label">Use <strong>ATS</strong> as WSO/EGCA-Id</label>
+    </div>
+
+    <div id="dgca-tab-status" class="tab-status tab-status--unknown">DGCA tab: checking…</div>
+
+    <div class="controls" style="padding:8px 0 0 0;">
+      <button id="btn-check-dgca" class="btn btn--ghost btn--sm">Check</button>
+      <button id="btn-start" class="btn btn--primary" disabled>▶ Start Filling</button>
+      <button id="btn-abort" class="btn btn--danger" style="display:none;">■ Abort</button>
+    </div>
+  </div>
+
+  <!-- Progress -->
+  <div class="card" id="progress-section" style="display:none;">
+    <div class="progress-info">
+      <span id="progress-text">Starting…</span>
+      <span id="progress-stats" style="font-size:11px;color:#888;"></span>
+    </div>
+    <div class="progress-track">
+      <div id="progress-fill" class="progress-fill" style="width:0%"></div>
+    </div>
+  </div>
+
+  <!-- Row list (scrollable) -->
+  <div id="row-list-section" style="display:none;">
+    <div class="section-title">Queued Rows</div>
+    <div id="row-list" class="row-list"></div>
+  </div>
+
+  <!-- Log -->
+  <div id="log" class="log"></div>
+
+  <!-- Error modal -->
+  <div id="error-backdrop" class="error-modal" style="display:none;">
+    <div class="error-modal__backdrop"></div>
+    <div class="error-modal__content" id="error-modal">
+      <h3>❌ Error — Row <span id="error-modal-row-num"></span></h3>
+      <div class="error-modal__msg" id="error-modal-msg"></div>
+      <button id="error-modal-close" class="btn btn--ghost">Close</button>
+    </div>
+  </div>
+
+  <script src="panel.js"></script>
+</body>
+</html>
