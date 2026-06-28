@@ -308,6 +308,16 @@ header {
   color: #ef5350;
 }
 
+.row-item__trainee {
+  font-size: 10px;
+  color: #66bb6a;
+  font-style: italic;
+  background: rgba(102, 187, 106, 0.1);
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid rgba(102, 187, 106, 0.2);
+}
+
 /* ── Row / gap utilities ──────────────────────────────────────────────────── */
 .row { display: flex; align-items: center; }
 .gap-8 { gap: 8px; }

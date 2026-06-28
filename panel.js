@@ -5,51 +5,51 @@
 
 // ── Inlined constants (must stay in sync with shared.js) ─────────────────────
 const DUTY_TYPE = {
-  CONTROLLING:            'controlling',
-  OJT_INSTR_PRACTICAL:    'ojt_instr_practical',
-  OJT_INSTR_THEORY:       'ojt_instr_theory',
-  OJT_TRAINING_THEORY:    'ojt_training_theory',
+  CONTROLLING: 'controlling',
+  OJT_INSTR_PRACTICAL: 'ojt_instr_practical',
+  OJT_INSTR_THEORY: 'ojt_instr_theory',
+  OJT_TRAINING_THEORY: 'ojt_training_theory',
   OJT_TRAINING_PRACTICAL: 'ojt_training_practical',
-  SKILL_ASSESSMENT:       'skill_assessment',
-  EXAMINER_SKILL_TEST:    'examiner_skill_test',
-  EXAMINER_PROF_CHECK:    'examiner_prof_check',
-  EXAMINER_KNOWLEDGE:     'examiner_knowledge',
+  SKILL_ASSESSMENT: 'skill_assessment',
+  EXAMINER_SKILL_TEST: 'examiner_skill_test',
+  EXAMINER_PROF_CHECK: 'examiner_prof_check',
+  EXAMINER_KNOWLEDGE: 'examiner_knowledge',
 };
 
 const ROW_STATUS = {
-  PENDING:   'pending',
-  FILLING:   'filling',
+  PENDING: 'pending',
+  FILLING: 'filling',
   SUBMITTED: 'submitted',
-  ERROR:     'error',
-  SKIPPED:   'skipped',
+  ERROR: 'error',
+  SKIPPED: 'skipped',
 };
 
 const DUTY_LABEL = {
-  [DUTY_TYPE.CONTROLLING]:            'Controlling',
-  [DUTY_TYPE.OJT_INSTR_PRACTICAL]:    'OJT Instr. Practical',
-  [DUTY_TYPE.OJT_INSTR_THEORY]:       'OJT Instr. Theory',
-  [DUTY_TYPE.OJT_TRAINING_THEORY]:    'OJT Training Theory',
+  [DUTY_TYPE.CONTROLLING]: 'Controlling',
+  [DUTY_TYPE.OJT_INSTR_PRACTICAL]: 'OJT Instr. Practical',
+  [DUTY_TYPE.OJT_INSTR_THEORY]: 'OJT Instr. Theory',
+  [DUTY_TYPE.OJT_TRAINING_THEORY]: 'OJT Training Theory',
   [DUTY_TYPE.OJT_TRAINING_PRACTICAL]: 'OJT Training Practical',
-  [DUTY_TYPE.SKILL_ASSESSMENT]:       'Skill Assessment',
-  [DUTY_TYPE.EXAMINER_SKILL_TEST]:    'Examiner: Skill Test',
-  [DUTY_TYPE.EXAMINER_PROF_CHECK]:    'Examiner: Prof. Check',
-  [DUTY_TYPE.EXAMINER_KNOWLEDGE]:     'Examiner: Knowledge',
+  [DUTY_TYPE.SKILL_ASSESSMENT]: 'Skill Assessment',
+  [DUTY_TYPE.EXAMINER_SKILL_TEST]: 'Examiner: Skill Test',
+  [DUTY_TYPE.EXAMINER_PROF_CHECK]: 'Examiner: Prof. Check',
+  [DUTY_TYPE.EXAMINER_KNOWLEDGE]: 'Examiner: Knowledge',
 };
 
 const PILL_CLASS = {
-  [ROW_STATUS.PENDING]:   'pill--pending',
-  [ROW_STATUS.FILLING]:   'pill--filling',
+  [ROW_STATUS.PENDING]: 'pill--pending',
+  [ROW_STATUS.FILLING]: 'pill--filling',
   [ROW_STATUS.SUBMITTED]: 'pill--submitted',
-  [ROW_STATUS.ERROR]:     'pill--error',
-  [ROW_STATUS.SKIPPED]:   'pill--skipped',
+  [ROW_STATUS.ERROR]: 'pill--error',
+  [ROW_STATUS.SKIPPED]: 'pill--skipped',
 };
 
 const PILL_LABEL = {
-  [ROW_STATUS.PENDING]:   'Pending',
-  [ROW_STATUS.FILLING]:   'Filling…',
+  [ROW_STATUS.PENDING]: 'Pending',
+  [ROW_STATUS.FILLING]: 'Filling…',
   [ROW_STATUS.SUBMITTED]: '✓ Added',
-  [ROW_STATUS.ERROR]:     '✗ Error',
-  [ROW_STATUS.SKIPPED]:   '— Skip',
+  [ROW_STATUS.ERROR]: '✗ Error',
+  [ROW_STATUS.SKIPPED]: '— Skip',
 };
 
 // ── Per-station WSO labels (must stay in sync with shared.js WSO_MAP) ─────────
@@ -105,53 +105,53 @@ function sortQueue(rows, statuses, errors) {
   const indexed = rows.map((row, i) => ({
     row,
     status: statuses[i] || ROW_STATUS.PENDING,
-    error:  errors[i]   || null,
-    key:    rowSortKey(row),
+    error: errors[i] || null,
+    key: rowSortKey(row),
   }));
   indexed.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-  const sortedRows     = indexed.map(x => x.row);
+  const sortedRows = indexed.map(x => x.row);
   const sortedStatuses = indexed.map(x => x.status);
-  const sortedErrors   = {};
+  const sortedErrors = {};
   indexed.forEach((x, i) => { if (x.error) sortedErrors[i] = x.error; });
   return { rows: sortedRows, statuses: sortedStatuses, errors: sortedErrors };
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const state = {
-  rows:           [],
-  statuses:       [],
-  errors:         {},
+  rows: [],
+  statuses: [],
+  errors: {},
   sessionRunning: false,
-  dgcaTabReady:   false,
-  useAts:         false,
+  dgcaTabReady: false,
+  useAts: false,
 };
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
-const badge            = $('badge');
-const instructions     = $('instructions');
-const queueSection     = $('queue-section');
-const queueCount       = $('queue-count');
-const wsoAtsToggle     = $('wso-ats-toggle');
-const dgcaTabStatus    = $('dgca-tab-status');
-const progressSection  = $('progress-section');
-const progressText     = $('progress-text');
-const progressStats    = $('progress-stats');
-const progressFill     = $('progress-fill');
-const btnStart         = $('btn-start');
-const btnAbort         = $('btn-abort');
-const btnClearSuccess  = $('btn-clear-success');
-const btnClear         = $('btn-clear');
-const wsoAtsLabel      = $('wso-ats-label');
-const btnCheckDgca     = $('btn-check-dgca');
-const rowListSection   = $('row-list-section');
-const rowList          = $('row-list');
-const errorModal       = $('error-modal');
-const errorBackdrop    = $('error-backdrop');
+const badge = $('badge');
+const instructions = $('instructions');
+const queueSection = $('queue-section');
+const queueCount = $('queue-count');
+const wsoAtsToggle = $('wso-ats-toggle');
+const dgcaTabStatus = $('dgca-tab-status');
+const progressSection = $('progress-section');
+const progressText = $('progress-text');
+const progressStats = $('progress-stats');
+const progressFill = $('progress-fill');
+const btnStart = $('btn-start');
+const btnAbort = $('btn-abort');
+const btnClearSuccess = $('btn-clear-success');
+const btnClear = $('btn-clear');
+const wsoAtsLabel = $('wso-ats-label');
+const btnCheckDgca = $('btn-check-dgca');
+const rowListSection = $('row-list-section');
+const rowList = $('row-list');
+const errorModal = $('error-modal');
+const errorBackdrop = $('error-backdrop');
 const errorModalRowNum = $('error-modal-row-num');
-const errorModalMsg    = $('error-modal-msg');
-const errorModalClose  = $('error-modal-close');
-const logEl            = $('log');
+const errorModalMsg = $('error-modal-msg');
+const errorModalClose = $('error-modal-close');
+const logEl = $('log');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function log(msg, type = '') {
@@ -167,7 +167,7 @@ function escHtml(str) {
 
 function setBadge(label, cls) {
   badge.textContent = label;
-  badge.className   = `badge badge--${cls}`;
+  badge.className = `badge badge--${cls}`;
 }
 
 function dutyLabel(dutyType) {
@@ -188,37 +188,37 @@ function loadFromStorage() {
   chrome.storage.session.get(
     ['dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors', 'dgca_session_ts', 'dgca_use_ats']
   ).then((data) => {
-    state.useAts         = !!(data?.dgca_use_ats);
+    state.useAts = !!(data?.dgca_use_ats);
     wsoAtsToggle.checked = state.useAts;
 
-    const rows     = data?.dgca_pending_rows || [];
-    const statuses = data?.dgca_row_status   || [];
-    const errors   = data?.dgca_row_errors   || {};
+    const rows = data?.dgca_pending_rows || [];
+    const statuses = data?.dgca_row_status || [];
+    const errors = data?.dgca_row_errors || {};
 
     // Always display (and process) in chronological order regardless of
     // the order in which rows were added to the queue.
     const sorted = sortQueue(rows, statuses, errors);
-    state.rows     = sorted.rows;
+    state.rows = sorted.rows;
     state.statuses = sorted.statuses;
-    state.errors   = sorted.errors;
+    state.errors = sorted.errors;
 
     if (rows.length > 0) {
       renderQueueSection(state.rows);
       renderRowList(state.rows, state.statuses, state.errors);
       checkDgcaTab();
     } else {
-      queueSection.style.display   = 'none';
+      queueSection.style.display = 'none';
       rowListSection.style.display = 'none';
-      btnStart.disabled            = true;
+      btnStart.disabled = true;
       setBadge('Idle', 'idle');
     }
-  }).catch(() => {});
+  }).catch(() => { });
 }
 
 // ── Render queue section (count only) ─────────────────────────────────────────
 function renderQueueSection(rows) {
   queueSection.style.display = 'block';
-  queueCount.textContent     = `${rows.length} row${rows.length === 1 ? '' : 's'} queued`;
+  queueCount.textContent = `${rows.length} row${rows.length === 1 ? '' : 's'} queued`;
   btnStart.disabled = false;
   setBadge('Ready', 'done');
   refreshWsoLabel(rows);
@@ -229,7 +229,7 @@ function renderRowList(rows, statuses, errors) {
   rowListSection.style.display = 'block';
   rowList.innerHTML = rows.map((row, i) => {
     const status = statuses[i] || ROW_STATUS.PENDING;
-    const error  = errors[i]   || null;
+    const error = errors[i] || null;
 
     const pillClass = getPillClass(status);
     const pillLabel = getPillLabel(status);
@@ -246,6 +246,13 @@ function renderRowList(rows, statuses, errors) {
     let instrHtml = '';
     if (OJT_DUTY_TYPES.has(row.dutyType) && row.nameOjti) {
       instrHtml = `<span class="row-item__instr" title="Instructor">👤 ${escHtml(row.nameOjti)}</span>`;
+    }
+
+    let traineeHtml = '';
+    if (row.dutyType === DUTY_TYPE.OJT_INSTR_PRACTICAL && row.pNameTrainee) {
+      traineeHtml = `<span class="row-item__trainee" title="Trainee (Practical)">🎓 ${escHtml(row.pNameTrainee)}</span>`;
+    } else if (row.dutyType === DUTY_TYPE.OJT_INSTR_THEORY && row.tNameTrainee) {
+      traineeHtml = `<span class="row-item__trainee" title="Trainee (Theory)">📚 ${escHtml(row.tNameTrainee)}</span>`;
     }
 
     return `
@@ -288,22 +295,22 @@ function updateRowStatus(index, status, error) {
   const pill = $(`pill-${index}`);
   if (!item || !pill) return;
 
-  pill.className   = `pill ${getPillClass(status)}`;
+  pill.className = `pill ${getPillClass(status)}`;
   pill.textContent = getPillLabel(status);
 
   if (status === ROW_STATUS.ERROR && error) {
     // ← FIXED: Add data-error-idx attribute for consistency
     pill.setAttribute('data-error-idx', index);
-    pill.style.cursor         = 'pointer';
+    pill.style.cursor = 'pointer';
     pill.style.textDecoration = 'underline dotted';
-    pill.title                = 'Click to see error details';
-    pill.onclick              = () => showErrorModal(index);
+    pill.title = 'Click to see error details';
+    pill.onclick = () => showErrorModal(index);
   } else {
     pill.removeAttribute('data-error-idx');
-    pill.style.cursor         = '';
+    pill.style.cursor = '';
     pill.style.textDecoration = '';
-    pill.title                = '';
-    pill.onclick              = null;
+    pill.title = '';
+    pill.onclick = null;
   }
 
   item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -329,28 +336,28 @@ function deleteRow(index) {
 
   chrome.storage.session.set({
     dgca_pending_rows: state.rows,
-    dgca_row_status:   state.statuses,
-    dgca_row_errors:   state.errors,
+    dgca_row_status: state.statuses,
+    dgca_row_errors: state.errors,
   }).then(() => {
     if (state.rows.length === 0) {
-      queueSection.style.display   = 'none';
+      queueSection.style.display = 'none';
       rowListSection.style.display = 'none';
-      btnStart.disabled            = true;
+      btnStart.disabled = true;
       setBadge('Idle', 'idle');
     } else {
       renderQueueSection(state.rows);
       renderRowList(state.rows, state.statuses, state.errors);
     }
     log(`Row ${index + 1} removed from queue.`);
-  }).catch(() => {});
+  }).catch(() => { });
 }
 
 // ── Error modal ───────────────────────────────────────────────────────────────
 function showErrorModal(index) {
   const err = state.errors[index] || 'Unknown error';
   errorModalRowNum.textContent = index + 1;
-  errorModalMsg.textContent    = err;
-  errorBackdrop.style.display  = 'flex';
+  errorModalMsg.textContent = err;
+  errorBackdrop.style.display = 'flex';
 }
 
 errorModalClose.addEventListener('click', () => { errorBackdrop.style.display = 'none'; });
@@ -367,16 +374,16 @@ document.addEventListener('keydown', e => {
 // ── Check DGCA tab ────────────────────────────────────────────────────────────
 function checkDgcaTab() {
   dgcaTabStatus.textContent = 'DGCA tab: checking…';
-  dgcaTabStatus.className   = 'tab-status tab-status--checking';
+  dgcaTabStatus.className = 'tab-status tab-status--checking';
   chrome.runtime.sendMessage({ type: 'PING_DGCA_TAB' }, (resp) => {
     if (chrome.runtime.lastError || !resp?.ok) {
       dgcaTabStatus.textContent = '✗ DGCA tab not ready — open & navigate to entry page';
-      dgcaTabStatus.className   = 'tab-status tab-status--error';
-      state.dgcaTabReady        = false;
+      dgcaTabStatus.className = 'tab-status tab-status--error';
+      state.dgcaTabReady = false;
     } else {
       dgcaTabStatus.textContent = '✓ DGCA tab ready';
-      dgcaTabStatus.className   = 'tab-status tab-status--ready';
-      state.dgcaTabReady        = true;
+      dgcaTabStatus.className = 'tab-status tab-status--ready';
+      state.dgcaTabReady = true;
     }
   });
 }
@@ -386,7 +393,7 @@ btnCheckDgca.addEventListener('click', checkDgcaTab);
 // ── WSO toggle ────────────────────────────────────────────────────────────────
 wsoAtsToggle.addEventListener('change', () => {
   state.useAts = wsoAtsToggle.checked;
-  chrome.storage.session.set({ dgca_use_ats: state.useAts }).catch(() => {});
+  chrome.storage.session.set({ dgca_use_ats: state.useAts }).catch(() => { });
   const { labelWSO, labelATS } = getWsoLabels(
     (state.rows[0]?.station || 'VIJP').toUpperCase()
   );
@@ -403,24 +410,24 @@ btnStart.addEventListener('click', () => {
   // Re-sort before starting so processing is always chronological,
   // even if rows were queued in a different order.
   const resorted = sortQueue(state.rows, state.rows.map(() => ROW_STATUS.PENDING), {});
-  state.rows     = resorted.rows;
+  state.rows = resorted.rows;
   state.statuses = state.rows.map(() => ROW_STATUS.PENDING);
-  state.errors   = {};
+  state.errors = {};
   state.sessionRunning = true;
 
   chrome.storage.session.set({
     dgca_pending_rows: state.rows,
-    dgca_row_status:   state.statuses,
-    dgca_row_errors:   {},
-  }).catch(() => {});
+    dgca_row_status: state.statuses,
+    dgca_row_errors: {},
+  }).catch(() => { });
 
   progressSection.style.display = 'block';
-  progressText.textContent      = 'Starting…';
-  progressStats.textContent     = '';
-  progressFill.style.width      = '0%';
-  btnStart.disabled             = true;
-  btnAbort.style.display        = 'inline-block';
-  wsoAtsToggle.disabled         = true;
+  progressText.textContent = 'Starting…';
+  progressStats.textContent = '';
+  progressFill.style.width = '0%';
+  btnStart.disabled = true;
+  btnAbort.style.display = 'inline-block';
+  wsoAtsToggle.disabled = true;
   setBadge('Running', 'running');
   const _wsoLabels = getWsoLabels((state.rows[0]?.station || 'VIJP').toUpperCase());
   log(`Session started — ${state.rows.length} rows to process (WSO: ${state.useAts ? _wsoLabels.labelATS : _wsoLabels.labelWSO})…`);
@@ -432,11 +439,11 @@ btnStart.addEventListener('click', () => {
       const err = resp?.error || chrome.runtime.lastError?.message || 'Unknown error';
       log(`Failed to start: ${err}`, 'error');
       setBadge('Error', 'error');
-      btnStart.disabled             = false;
-      btnAbort.style.display        = 'none';
+      btnStart.disabled = false;
+      btnAbort.style.display = 'none';
       progressSection.style.display = 'none';
-      wsoAtsToggle.disabled         = false;
-      state.sessionRunning          = false;
+      wsoAtsToggle.disabled = false;
+      state.sessionRunning = false;
     }
   });
 });
@@ -445,11 +452,11 @@ btnStart.addEventListener('click', () => {
 btnAbort.addEventListener('click', () => {
   if (!confirm('Abort the current session?')) return;
   chrome.runtime.sendMessage({ type: 'REQUEST_ABORT' });
-  state.sessionRunning          = false;
+  state.sessionRunning = false;
   setBadge('Idle', 'idle');
-  btnAbort.style.display        = 'none';
-  btnStart.disabled             = false;
-  wsoAtsToggle.disabled         = false;
+  btnAbort.style.display = 'none';
+  btnStart.disabled = false;
+  wsoAtsToggle.disabled = false;
   progressSection.style.display = 'none';
   log('Session aborted.');
 });
@@ -471,33 +478,33 @@ function clearSuccessRows() {
     .map((_, i) => i)
     .filter(i => state.statuses[i] !== ROW_STATUS.SUBMITTED);
 
-  const newRows     = keepIndices.map(i => state.rows[i]);
+  const newRows = keepIndices.map(i => state.rows[i]);
   const newStatuses = keepIndices.map(i => state.statuses[i]);
-  const newErrors   = {};
+  const newErrors = {};
   keepIndices.forEach((oldIdx, newIdx) => {
     if (state.errors[oldIdx]) newErrors[newIdx] = state.errors[oldIdx];
   });
 
-  state.rows     = newRows;
+  state.rows = newRows;
   state.statuses = newStatuses;
-  state.errors   = newErrors;
+  state.errors = newErrors;
 
   chrome.storage.session.set({
     dgca_pending_rows: state.rows,
-    dgca_row_status:   state.statuses,
-    dgca_row_errors:   state.errors,
+    dgca_row_status: state.statuses,
+    dgca_row_errors: state.errors,
   }).then(() => {
     if (state.rows.length === 0) {
-      queueSection.style.display   = 'none';
+      queueSection.style.display = 'none';
       rowListSection.style.display = 'none';
-      btnStart.disabled            = true;
+      btnStart.disabled = true;
       setBadge('Idle', 'idle');
     } else {
       renderQueueSection(state.rows);
       renderRowList(state.rows, state.statuses, state.errors);
     }
     log(`Cleared ${submittedCount} submitted row${submittedCount === 1 ? '' : 's'} from queue.`, 'ok');
-  }).catch(() => {});
+  }).catch(() => { });
 }
 
 btnClearSuccess.addEventListener('click', clearSuccessRows);
@@ -511,15 +518,15 @@ btnClear.addEventListener('click', () => {
   chrome.storage.session.remove([
     'dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors', 'dgca_session_ts'
   ]).then(() => {
-    state.rows     = [];
+    state.rows = [];
     state.statuses = [];
-    state.errors   = {};
-    queueSection.style.display   = 'none';
+    state.errors = {};
+    queueSection.style.display = 'none';
     rowListSection.style.display = 'none';
-    btnStart.disabled            = true;
+    btnStart.disabled = true;
     setBadge('Idle', 'idle');
     log('Queue cleared.');
-  }).catch(() => {});
+  }).catch(() => { });
 });
 
 // ── Progress events from background ───────────────────────────────────────────
@@ -535,15 +542,15 @@ chrome.runtime.onMessage.addListener((msg) => {
 
     // ── Session-level terminal events ──────────────────────────────────────
     if (status === 'session-complete') {
-      state.sessionRunning  = false;
+      state.sessionRunning = false;
       wsoAtsToggle.disabled = false;
 
       const summary = `${msg.done} added, ${msg.errors} errors`;
 
       setBadge('Done', 'done');
-      btnAbort.style.display        = 'none';
-      btnStart.disabled             = false;
-      progressText.textContent      = `Done — ${summary}`;
+      btnAbort.style.display = 'none';
+      btnStart.disabled = false;
+      progressText.textContent = `Done — ${summary}`;
       const logType = msg.errors === 0 ? 'ok' : 'error';
       const logSuffix = msg.errors === 0 ? '' : ' Fix errors and re-run if needed.';
       log(`Session complete: ${summary}.${logSuffix}`, logType);
@@ -551,12 +558,12 @@ chrome.runtime.onMessage.addListener((msg) => {
     }
 
     if (status === 'session-error') {
-      state.sessionRunning          = false;
+      state.sessionRunning = false;
       setBadge('Error', 'error');
-      btnAbort.style.display        = 'none';
-      btnStart.disabled             = false;
-      wsoAtsToggle.disabled         = false;
-      progressText.textContent      = 'Session failed — see log';
+      btnAbort.style.display = 'none';
+      btnStart.disabled = false;
+      wsoAtsToggle.disabled = false;
+      progressText.textContent = 'Session failed — see log';
       log(`Session error: ${msg.error || 'Unknown error'}`, 'error');
       return;
     }
@@ -565,14 +572,14 @@ chrome.runtime.onMessage.addListener((msg) => {
     if (status) {
       updateRowStatus(index, status, error);
 
-      const done   = state.statuses.filter(s => s === ROW_STATUS.SUBMITTED).length;
+      const done = state.statuses.filter(s => s === ROW_STATUS.SUBMITTED).length;
       const errCnt = state.statuses.filter(s => s === ROW_STATUS.ERROR).length;
-      const proc   = done + errCnt;
-      const pct    = total > 0 ? Math.round((proc / total) * 100) : 0;
+      const proc = done + errCnt;
+      const pct = total > 0 ? Math.round((proc / total) * 100) : 0;
 
-      progressText.textContent  = `Row ${index + 1} / ${total} — ${status}`;
+      progressText.textContent = `Row ${index + 1} / ${total} — ${status}`;
       progressStats.textContent = `${done} added · ${errCnt} errors`;
-      progressFill.style.width  = `${pct}%`;
+      progressFill.style.width = `${pct}%`;
 
       if (error) {
         log(`Row ${index + 1} error — click the pill for details.`, 'error');
