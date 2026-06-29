@@ -109,6 +109,32 @@
     throw new Error(`Timeout waiting for element: ${sel}`);
   }
 
+async function ensureCheckboxWithOnclick(selector, shouldBeChecked) {
+  const el = await waitForSelector(selector);
+
+  // ✅ Check the element's OWN display, not inherited from hidden ancestors.
+  // The real check is: is the element itself hidden via inline style or
+  // a CSS rule directly on it? Ancestor visibility is handled by
+  // waitForVisible(SEL.ojtFieldsDiv) which runs before this is called.
+  const ownDisplay = el.style.display;
+  if (ownDisplay === 'none') return; // element itself is hidden
+
+  if (el.checked !== shouldBeChecked) {
+    // Layer 1: native click — fires the inline onclick attribute
+    el.click();
+    await sleep(150);
+
+    // Layer 2: if still not checked, set manually and fire handlers
+    if (el.checked !== shouldBeChecked) {
+      el.checked = shouldBeChecked;
+      try { el.onclick?.(); } catch (_) { }
+      try { window.fnSelectOnlyOneCheckbox?.(el); } catch (_) { }
+      try { window.fnSHowOJTFields1?.(); } catch (_) { }
+      await sleep(200);
+    }
+  }
+}
+
   // ── Helper: wait for a readonly text input to have a non-empty value ──────────
 async function waitForFieldValue(selector, timeout = 10000) {
   const deadline = Date.now() + timeout;
@@ -402,25 +428,30 @@ async function waitForFieldValue(selector, timeout = 10000) {
     }
 
     if (dutyType === DUTY_TYPE.OJT_INSTR_PRACTICAL) {
-      // Instructor providing OJT — duty='2', tick "OJT Provided" checkbox  
-      // The isOjtProvided checkbox is inside #ojtProvidedfields which is always
-      // visible when duty=2; clicking it fires fnSHowOJTFields1() to show
-      // examinerLicenseNumberDiv (confusingly named — holds trainee's info here)
-      await ensureCheckbox(SEL.isOjtProvided, true);
-      // Wait for examinerLicenseNumberDiv to appear (fnSHowOJTFields1 shows it)
-      const traineeAtcol = row.practicalTraineeAtcol || window.__DGCA__.getAtcol(row.pNameTrainee);
+  // ✅ Must wait for #ojtFields to be visible FIRST (fnShowOjTFields runs after typeOfDuty change)
+  await waitForVisible(SEL.ojtFieldsDiv);   // already in fillRow — confirm this runs before here
 
-      if (traineeAtcol) {
-        await waitForVisible(SEL.traineeLicNumDiv);
-        await typeIntoField(SEL.traineeAtcol, traineeAtcol);
-        await waitForFieldValue('#nameOfInstructor');
-      }
-    }
+  // ✅ Then wait for #ojtProvidedfields row itself (it has style="" so it's always shown,
+  //    but double-check it hasn't been hidden by a prior fnSelectOnlyOneCheckbox call)
+  await waitForVisible('#ojtProvidedfields');
+
+  // ✅ Now click with the corrected function
+  await ensureCheckboxWithOnclick(SEL.isOjtProvided, true);
+
+  // ✅ Then wait for traineeLicNumDiv which fnSHowOJTFields1() reveals
+  const traineeAtcol = row.practicalTraineeAtcol || window.__DGCA__.getAtcol(row.pNameTrainee);
+  if (traineeAtcol) {
+    await waitForVisible(SEL.traineeLicNumDiv);
+    await typeIntoField(SEL.traineeAtcol, traineeAtcol);
+    await waitForFieldValue('#nameOfInstructor');
+  }
+}
 
     if (dutyType === DUTY_TYPE.OJT_INSTR_THEORY) {
       // Instructor teaching theory — duty='2', tick "Knowledge" checkbox
       // isTheoryClasses is the correct selector (NOT a dropdown #knowledgeTypeId)
-      await ensureCheckbox(SEL.isTheoryClasses, true);
+      // await ensureCheckbox(SEL.isTheoryClasses, true);
+      await ensureCheckboxWithOnclick(SEL.isTheoryClasses, true);
       // No ATCOL required for theory instruction
     }
 
