@@ -109,6 +109,17 @@
     throw new Error(`Timeout waiting for element: ${sel}`);
   }
 
+  // ── Helper: wait for a readonly text input to have a non-empty value ──────────
+async function waitForFieldValue(selector, timeout = 10000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const el = document.querySelector(selector);
+    if (el && el.value && el.value.trim() !== '') return el;
+    await sleep(100);
+  }
+  throw new Error(`Timeout waiting for value in: ${selector}`);
+}
+
   /**
    * Wait for a <select> to have at least one non-placeholder option loaded.
    * Cascading dropdowns (WSO, Rating, ATS Unit) are populated via AJAX after
@@ -330,6 +341,7 @@
 
     // ── 4. Posting Station → triggers AJAX to populate WSO + Rating + ATS Unit
     await selectByValue(SEL.postingStation, postingStationVal);
+    await waitForFieldValue('#letterIcaoCode');
     // Wait for WSO dropdown to receive its options (AJAX-loaded)
     await waitForSelectOptions(SEL.wsoEgcaId);
 
@@ -385,6 +397,7 @@
         // examinerLicenseNumberDiv must be visible
         await waitForVisible(SEL.examinerLicNumDiv);
         await typeIntoField(SEL.examinerAtcol, instructorAtcol);
+        await waitForFieldValue('#ojtTrainerName');
       }
     }
 
@@ -400,6 +413,7 @@
       if (traineeAtcol) {
         await waitForVisible(SEL.traineeLicNumDiv);
         await typeIntoField(SEL.traineeAtcol, traineeAtcol);
+        await waitForFieldValue('#nameOfInstructor');
       }
     }
 
