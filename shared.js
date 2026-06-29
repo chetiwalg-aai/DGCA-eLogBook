@@ -64,7 +64,7 @@
       'ACC':         'ACC1',
       'ACC(S)':      'ACC(s)1',
       'APP':         'APP1',
-      'APP(S)':      'APP2',
+      'APP(S)':      'APP(s)1',
       'APP_APP(S)':  'APP(ps)1',
     },
     // 'VIDP': {
@@ -88,7 +88,6 @@
     [DUTY_TYPE.EXAMINER_KNOWLEDGE]:     '4',  // Examiner Functions (duty=4; tick Knowledge checkbox)
   };
 
-  // 69 entries from ATCO_with_ATCOL_Number_Jaipur_Airport.xlsx
   const INSTRUCTOR_ATCOL_MAP = {
     'charan singh':               '02647',
     'shivram meena':              '00706',
@@ -159,6 +158,11 @@
     'bhawani shankar bunkar':     '03917',
     'rahul meena':                '03938',
     'satender':                   '01135',
+    'kartik lamba':               '01217',
+    'chetan sharma':              '01191',
+    'alka dubey':                 '00413',
+    'deepak saini':               '01976',
+    'devendra kumar patodiya':    '00772',
   };
 
   const ROW_STATUS = {

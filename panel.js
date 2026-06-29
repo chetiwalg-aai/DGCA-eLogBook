@@ -264,6 +264,7 @@ function renderRowList(rows, statuses, errors) {
           ${atsHtml}
           <span class="row-item__duty">${dutyLabel(row.dutyType)}</span>
           ${instrHtml}
+          ${traineeHtml}
         </div>
         <span id="pill-${i}" class="pill ${pillClass}" ${errorAttr}>${pillLabel}</span>
         <button class="row-item__delete" data-delete-idx="${i}" title="Remove from queue">×</button>
