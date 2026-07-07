@@ -206,6 +206,24 @@
     return firstVal || 'ADC1';
   }
 
+  /**
+   * Resolve the OJT Environment dropdown value (#ojtOprEnvSmlation) from the
+   * raw remarks/atsUnit text in the AAI logbook row.
+   *
+   * Mirrors resolveAtsUnit's MOD_-stripping convention. If the remarks text
+   * contains 'SIM' (e.g. 'SIM', 'MOD_SIM'), the entry is a simulator session
+   * and the portal's "Simulation" option should be selected instead of the
+   * default "Operational Environment".
+   *
+   * @param {string} remarksText  Raw ATS_UNIT or REMARKS cell text.
+   * @returns {string} 'Simulation' or 'Operational Environment'.
+   */
+  function resolveOjtEnv(remarksText) {
+    let r = String(remarksText || '').trim().toUpperCase();
+    if (r.startsWith('MOD_')) r = r.slice(5);
+    return r.includes('SIM') ? 'Simulation' : 'Operational Environment';
+  }
+
   function getStationValue(code) {
     return STATION_MAP[String(code || '').trim().toUpperCase()] || '100069';
   }
@@ -266,7 +284,7 @@
     COL, DUTY_TYPE, ROW_STATUS,
     STATION_MAP, RATING_MAP, WSO_MAP, ATS_UNIT_MAP, STATION_ATS_UNIT_MAP,
     TYPE_OF_DUTY_MAP, INSTRUCTOR_ATCOL_MAP,
-    resolveAtsUnit, getStationValue, getRatingValue, getWsoValue,
+    resolveAtsUnit, resolveOjtEnv, getStationValue, getRatingValue, getWsoValue,
     getTypeOfDuty, getAtcol,
     parseDateDMY, formatDDMMYYYY, addOneDay, normaliseTime, sleep,
   };

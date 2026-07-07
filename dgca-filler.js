@@ -7,7 +7,7 @@
 
   const {
     getStationValue, getRatingValue, getWsoValue,
-    getTypeOfDuty, resolveAtsUnit,
+    getTypeOfDuty, resolveAtsUnit, resolveOjtEnv,
     parseDateDMY, formatDDMMYYYY, addOneDay, sleep,
     DUTY_TYPE,
   } = window.__DGCA__;
@@ -21,6 +21,7 @@
     wsoEgcaId: '#atStoEgcaId',
     ratingId: '#ratingId',
     atsUnitId: '#atsUnitId',
+    remarksField: '#ratingAndAtsRemarks',     // Remarks
     typeOfDutyId: '#typeOfDutyId',
     // Sub-fields inside #ojtFields (visible only for duty types 2,3,4,5,6)
     ojtFieldsDiv: '#ojtFields',
@@ -324,6 +325,7 @@
     const ratingVal = getRatingValue(atsUnitRaw);
     const wsoVal = getWsoValue(stationCode, useAts);
     const atsUnitVal = resolveAtsUnit(remarks, stationCode);
+    const ojtEnvVal = resolveOjtEnv(remarks);
     const typeOfDutyVal = getTypeOfDuty(dutyType);
 
     const { d, m, y } = parseDateDMY(date);
@@ -393,7 +395,7 @@
         // Wait for the ojtFields div to become visible — fnShowOjTFields() runs async
         await waitForVisible(SEL.ojtFieldsDiv);
       }
-      await selectByValue(SEL.ojtEnv, 'Operational Environment');
+      await selectByValue(SEL.ojtEnv, ojtEnvVal);
       if (instructorAtcol) {
         // examinerLicenseNumberDiv must be visible
         await waitForVisible(SEL.examinerLicNumDiv);
@@ -407,7 +409,7 @@
       if (needsOjtFields) {
         await waitForVisible(SEL.ojtFieldsDiv);
       }
-      await selectByValue(SEL.ojtEnv, 'Operational Environment');
+      await selectByValue(SEL.ojtEnv, ojtEnvVal);
 
       if (needsOjtFields) {
         await waitForVisible(SEL.ojtFieldsDiv);
@@ -423,6 +425,8 @@
 
     if (dutyType === DUTY_TYPE.OJT_INSTR_THEORY) {
       await ensureCheckbox(SEL.isTheoryClasses, true);
+      const traineeAtcol = row.theoryTraineeAtcol || window.__DGCA__.getAtcol(row.tNameTrainee);
+      await typeIntoField(SEL.remarksField, `${row.tNameTrainee} (${traineeAtcol})`);
     }
 
     if (dutyType === DUTY_TYPE.EXAMINER_SKILL_TEST || dutyType === DUTY_TYPE.SKILL_ASSESSMENT) {
