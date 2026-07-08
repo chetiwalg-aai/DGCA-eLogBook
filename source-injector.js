@@ -6,7 +6,7 @@
 (function () {
   'use strict';
 
-  const { COL, DUTY_TYPE, normaliseTime, getAtcol } = window.__DGCA__;
+  const { COL, DUTY_TYPE, normaliseTime, getAtcol, isSimEntry } = window.__DGCA__;
 
   let _offset = 0;
   let _selectedRows = {};
@@ -25,7 +25,14 @@
     return `${date}|${station}|${timeFrom}|${timeTo}|${dutyType}`;
   }
 
-  function detectDutyTypeFromRow(tr) {
+  /**
+   * Determine which set of AAI time columns actually holds data for this row.
+   * This is purely about WHERE the times live in the source table — it is
+   * NOT the same as the duty type submitted to the DGCA portal (see
+   * resolvePortalDutyType below, which can retarget THEORY rows to
+   * PRACTICAL when the entry is really a simulator session).
+   */
+  function detectSourceTimeCategory(tr) {
     if (cellText(tr, COL.CTIME_FROM)) return DUTY_TYPE.CONTROLLING;
     if (cellText(tr, COL.PTIME_FROM)) return DUTY_TYPE.OJT_INSTR_PRACTICAL;
     if (cellText(tr, COL.TTIME_FROM)) return DUTY_TYPE.OJT_INSTR_THEORY;
@@ -34,7 +41,27 @@
     return DUTY_TYPE.CONTROLLING;
   }
 
-  function getTimesForDuty(tr, dutyType) {
+  /**
+   * Resolve the duty type actually submitted to the DGCA portal.
+   *
+   * AAI logs simulator sessions with their time in the THEORY columns
+   * (TTIME for the instructor, OTIME for the trainee), but on the DGCA
+   * portal a SIM entry is a PRACTICAL duty (with the "Simulation" ojtEnv
+   * option, handled separately in dgca-filler.js) — not a theory/classroom
+   * entry. So when remarks mark the row as SIM, retarget:
+   *   OJT_INSTR_THEORY    -> OJT_INSTR_PRACTICAL
+   *   OJT_TRAINING_THEORY -> OJT_TRAINING_PRACTICAL
+   * Non-theory categories (already practical, or controlling) pass through
+   * unchanged — the SIM tag has nothing to override there.
+   */
+  function resolvePortalDutyType(sourceCategory, remarksText) {
+    if (!isSimEntry(remarksText)) return sourceCategory;
+    if (sourceCategory === DUTY_TYPE.OJT_INSTR_THEORY) return DUTY_TYPE.OJT_INSTR_PRACTICAL;
+    if (sourceCategory === DUTY_TYPE.OJT_TRAINING_THEORY) return DUTY_TYPE.OJT_TRAINING_PRACTICAL;
+    return sourceCategory;
+  }
+
+  function getTimesForDuty(tr, sourceCategory) {
     const map = {
       [DUTY_TYPE.CONTROLLING]: [COL.CTIME_FROM, COL.CTIME_TO, COL.CTIME_TOTAL],
       [DUTY_TYPE.OJT_INSTR_PRACTICAL]: [COL.PTIME_FROM, COL.PTIME_TO, COL.PTIME_TOTAL],
@@ -42,7 +69,7 @@
       [DUTY_TYPE.OJT_TRAINING_THEORY]: [COL.OTIME_FROM, COL.OTIME_TO, COL.OTIME_TOTAL],
       [DUTY_TYPE.OJT_TRAINING_PRACTICAL]: [COL.OPTIME_FROM, COL.OPTIME_TO, COL.OPTIME_TOTAL],
     };
-    const cols = map[dutyType];
+    const cols = map[sourceCategory];
     if (!cols) return { from: '', to: '', total: '' };
     return {
       from: normaliseTime(cellText(tr, cols[0])),
@@ -52,8 +79,13 @@
   }
 
   function parseRow(tr) {
-    const dutyType = detectDutyTypeFromRow(tr);
-    const times = getTimesForDuty(tr, dutyType);
+    const remarks = cellText(tr, COL.REMARKS);
+    // sourceCategory tells us WHERE the times live (source table columns);
+    // dutyType is what actually gets submitted to the DGCA portal, which can
+    // diverge from sourceCategory for SIM entries (see resolvePortalDutyType).
+    const sourceCategory = detectSourceTimeCategory(tr);
+    const dutyType = resolvePortalDutyType(sourceCategory, remarks);
+    const times = getTimesForDuty(tr, sourceCategory);
     const date = cellText(tr, COL.DATE);
     const station = cellText(tr, COL.STATION);
     const nameOjti = cellText(tr, COL.NAME_OJTI);
@@ -64,7 +96,7 @@
       id: rowId(date, station, times.from, times.to, dutyType),
       date, station,
       atsUnit: cellText(tr, COL.ATS_UNIT),
-      remarks: cellText(tr, COL.REMARKS),
+      remarks,
       nameOjti: nameOjti,
       instructorAtcol: getAtcol(nameOjti),
       pNameTrainee: pNameTrainee,

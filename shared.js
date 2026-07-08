@@ -33,6 +33,7 @@
 
   const RATING_MAP = {
     'ADC':          '8000310',
+    'APP':       '8000311', //Change to 311
     'APP(P)':       '8000311',
     'APP(S)':       '8000312',
     'ACC(P)':       '8000313',
@@ -207,21 +208,27 @@
   }
 
   /**
+   * Whether the row's remarks/ATS-unit text marks this as a Simulator entry.
+   * Remarks can carry 'SIM' and 'MOD_' independently or combined
+   * (e.g. 'SIM', 'MOD_ADC1', 'MOD_SIM') — this just checks for 'SIM' anywhere
+   * in the text, regardless of a MOD_ prefix.
+   *
+   * @param {string} remarksText  Raw ATS_UNIT or REMARKS cell text.
+   * @returns {boolean}
+   */
+  function isSimEntry(remarksText) {
+    return String(remarksText || '').trim().toUpperCase().includes('SIM');
+  }
+
+  /**
    * Resolve the OJT Environment dropdown value (#ojtOprEnvSmlation) from the
    * raw remarks/atsUnit text in the AAI logbook row.
-   *
-   * Mirrors resolveAtsUnit's MOD_-stripping convention. If the remarks text
-   * contains 'SIM' (e.g. 'SIM', 'MOD_SIM'), the entry is a simulator session
-   * and the portal's "Simulation" option should be selected instead of the
-   * default "Operational Environment".
    *
    * @param {string} remarksText  Raw ATS_UNIT or REMARKS cell text.
    * @returns {string} 'Simulation' or 'Operational Environment'.
    */
   function resolveOjtEnv(remarksText) {
-    let r = String(remarksText || '').trim().toUpperCase();
-    if (r.startsWith('MOD_')) r = r.slice(5);
-    return r.includes('SIM') ? 'Simulation' : 'Operational Environment';
+    return isSimEntry(remarksText) ? 'Simulation' : 'Operational Environment';
   }
 
   function getStationValue(code) {
@@ -284,7 +291,7 @@
     COL, DUTY_TYPE, ROW_STATUS,
     STATION_MAP, RATING_MAP, WSO_MAP, ATS_UNIT_MAP, STATION_ATS_UNIT_MAP,
     TYPE_OF_DUTY_MAP, INSTRUCTOR_ATCOL_MAP,
-    resolveAtsUnit, resolveOjtEnv, getStationValue, getRatingValue, getWsoValue,
+    resolveAtsUnit, resolveOjtEnv, isSimEntry, getStationValue, getRatingValue, getWsoValue,
     getTypeOfDuty, getAtcol,
     parseDateDMY, formatDDMMYYYY, addOneDay, normaliseTime, sleep,
   };
