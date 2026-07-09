@@ -384,7 +384,7 @@
     //   7 = Familiarisation             → ojtFields shown
     //   8 = ART                         → ojtFields shown
 
-    const needsOjtFields = !['1', '5'].includes(typeOfDutyVal);
+    const needsOjtFields = !['1', '7'].includes(typeOfDutyVal);
 
 
 
@@ -396,6 +396,21 @@
         await waitForVisible(SEL.ojtFieldsDiv);
       }
       await selectByValue(SEL.ojtEnv, ojtEnvVal);
+      if (instructorAtcol) {
+        // examinerLicenseNumberDiv must be visible
+        await waitForVisible(SEL.examinerLicNumDiv);
+        await typeIntoField(SEL.examinerAtcol, instructorAtcol);
+        await waitForFieldValue('#ojtTrainerName');
+      }
+    }
+
+if (dutyType === DUTY_TYPE.OJT_TRAINING_THEORY) {
+      // Trainee doing OJT in Operational Environment
+      // duty='3', must set environment dropdown AND instructor's ATCOL
+      if (needsOjtFields) {
+        // Wait for the ojtFields div to become visible — fnShowOjTFields() runs async
+        await waitForVisible(SEL.ojtFieldsDiv);
+      }
       if (instructorAtcol) {
         // examinerLicenseNumberDiv must be visible
         await waitForVisible(SEL.examinerLicNumDiv);
