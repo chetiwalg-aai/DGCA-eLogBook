@@ -404,9 +404,9 @@
       }
     }
 
-if (dutyType === DUTY_TYPE.OJT_TRAINING_THEORY) {
-      // Trainee doing OJT in Operational Environment
-      // duty='3', must set environment dropdown AND instructor's ATCOL
+    if (dutyType === DUTY_TYPE.OJT_TRAINING_THEORY) {
+      // Trainee doing Classroom Theory
+      // duty='5', must set environment dropdown AND instructor's ATCOL
       if (needsOjtFields) {
         // Wait for the ojtFields div to become visible — fnShowOjTFields() runs async
         await waitForVisible(SEL.ojtFieldsDiv);
