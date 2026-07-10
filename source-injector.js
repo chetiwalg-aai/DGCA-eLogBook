@@ -203,7 +203,6 @@
     updateSelectionBadge();
     syncHeaderCheckbox(tableBody);
     wireBodyEvents(tableBody);
-    markStatusCells(tableBody);
   }
 
   function escAttr(str) {
@@ -244,50 +243,6 @@
     else {
       chkAll.checked = checked.length === all.length;
       chkAll.indeterminate = checked.length > 0 && checked.length < all.length;
-    }
-  }
-
-  function markStatusCells(tableBody) {
-    chrome.storage.session.get(['dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors'])
-      .then((data) => {
-        const pendingRows = data?.dgca_pending_rows || [];
-        const statuses = data?.dgca_row_status || [];
-        const errors = data?.dgca_row_errors || {};
-
-        tableBody.querySelectorAll('tr').forEach(tr => {
-          if (!isDataRow(tr)) return;
-          _offset = 1;
-          const date = cellText(tr, COL.DATE);
-          const station = cellText(tr, COL.STATION);
-          const matchIdx = pendingRows.findIndex(r => r.date === date && r.station === station);
-          if (matchIdx < 0) return;
-          const status = statuses[matchIdx];
-          if (!status || status === 'pending') return;
-
-          let statusTd = tr.querySelector('.dgca-status-cell');
-          if (!statusTd) {
-            statusTd = document.createElement('td');
-            statusTd.className = 'dgca-status-cell';
-            statusTd.style.cssText = 'font-size:11px;font-weight:600;text-align:center;padding:2px 4px;border:1px solid #ccc;cursor:pointer;';
-            tr.appendChild(statusTd);
-          }
-          applyStatusToCell(statusTd, status, errors[matchIdx], matchIdx);
-        });
-      })
-      .catch(() => { });
-  }
-
-  function applyStatusToCell(td, status, errorMsg, index) {
-    if (status === 'filling') {
-      td.textContent = '⏳'; td.style.color = '#007bff'; td.title = 'Filling…';
-    } else if (status === 'submitted') {
-      td.textContent = '✓'; td.style.color = '#28a745'; td.title = 'Added successfully';
-      td.parentElement.style.background = 'rgba(40,167,69,0.08)';
-    } else if (status === 'error') {
-      td.textContent = '✗'; td.style.color = '#dc3545';
-      td.parentElement.style.background = 'rgba(220,53,69,0.08)';
-      td.title = errorMsg || 'Error — click for details';
-      td.onclick = () => alert(`Row ${index + 1} Error:\n\n${errorMsg || 'Unknown error'}`);
     }
   }
 
@@ -371,14 +326,6 @@
       });
   }
 
-  function listenForStatusUpdates() {
-    chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== 'session' || !changes.dgca_row_status) return;
-      const tableBody = document.getElementById('tableBody');
-      if (tableBody) markStatusCells(tableBody);
-    });
-  }
-
   let _mutationObserver = null;
   let _debounceTimer = null;
 
@@ -417,7 +364,6 @@
     _offset = 0;
     injectCheckboxesIntoBody(tableBody);
     startObserving(tableBody);
-    listenForStatusUpdates();
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setup);

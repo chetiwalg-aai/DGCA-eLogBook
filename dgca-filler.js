@@ -486,7 +486,11 @@
     await typeIntoField(SEL.endTime, timeTo);
 
     // Small pause to let setTotalTimeDuration() fire
+    await waitForFieldValue('#totalDuration');
     await sleep(300);
+    // await setDatePickerValue(`#formatDate`, toDateStr);
+    // await typeIntoField('#formatTime', timeTo);
+
   }
 
   // ── Click Add + dual verification ────────────────────────────────────────────
@@ -613,7 +617,12 @@
     _sessionRunning = false;
     const done = statuses.filter(s => s === 'submitted').length;
     const errCnt = statuses.filter(s => s === 'error').length;
-    sendProgress({ type: 'session-complete', total: rows.length, done, errors: errCnt });
+    // NOTE: use `status`, not `type` — sendProgress() spreads this payload
+    // after `type: 'FILL_PROGRESS'`, so a `type` key here would silently
+    // clobber it and the message would never match the FILL_PROGRESS relay
+    // in service-worker.js (or the `status` check in panel.js), leaving the
+    // side panel stuck in "Running" forever even though the loop finished.
+    sendProgress({ status: 'session-complete', total: rows.length, done, errors: errCnt });
   }
 
   function sendProgress(payload) {
@@ -628,7 +637,7 @@
         return;
       }
       runSession(msg.rows)
-        .catch(err => sendProgress({ type: 'session-error', error: err.message }));
+        .catch(err => sendProgress({ status: 'session-error', error: err.message }));
       sendResponse({ ok: true });
     } else if (msg.type === 'ABORT_SESSION') {
       _aborted = true;

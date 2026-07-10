@@ -322,6 +322,18 @@ header {
 .row { display: flex; align-items: center; }
 .gap-8 { gap: 8px; }
 
+/* ── Footer credit ────────────────────────────────────────────────────────── */
+.footer-credit {
+  text-align: center;
+  font-size: 11px;
+  color: #555;
+  padding: 14px 12px 4px;
+}
+.footer-credit__name {
+  color: #4fc3f7;
+  font-weight: 600;
+}
+
 /* ── Log strip ────────────────────────────────────────────────────────────── */
 .log {
   padding: 8px 12px;

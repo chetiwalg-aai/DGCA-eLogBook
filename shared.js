@@ -62,11 +62,11 @@
       'ADC_SMC_CLD': 'ADC1',
       'TWR': 'ADC2',
       'SMC_CLD': 'ADC3',
-      'ACC': 'ACC1',
       'ACC(S)': 'ACC(s)1',
-      'APP': 'APP1',
-      'APP(S)': 'APP(s)1',
+      'ACC': 'ACC1',
       'APP_APP(S)': 'APP(ps)1',
+      'APP(S)': 'APP(s)1',
+      'APP': 'APP1',
     },
     // 'VIDP': {
     //   'ADC': 'ADC1',
@@ -184,24 +184,21 @@
    * @returns {string} Portal option value (e.g. 'ADC1', 'APP1').
    */
   function resolveAtsUnit(remarksText, stationCode) {
-    let r = String(remarksText || '').trim().toUpperCase();
-    if (r.startsWith('MOD_')) r = r.slice(5);
+    const r = String(remarksText || '').trim().toUpperCase();
 
     const stCode = String(stationCode || 'VIJP').trim().toUpperCase();
     const map = STATION_ATS_UNIT_MAP[stCode] || STATION_ATS_UNIT_MAP['VIJP'];
 
-    // Exact match first
-    if (map[r]) return map[r];
-
-    // Substring fallback — order matters (more specific first)
-    if (r.includes('ADC_SMC_CLD') && map['ADC_SMC_CLD']) return map['ADC_SMC_CLD'];
-    if (r.includes('SMC_CLD') && map['SMC_CLD']) return map['SMC_CLD'];
-    if (r.includes('TWR') && map['TWR']) return map['TWR'];
-    if (r.includes('ACC(S)') && map['ACC(S)']) return map['ACC(S)'];
-    if (r.includes('ACC') && map['ACC']) return map['ACC'];
-    if (r.includes('APP_APP(S)') && map['APP_APP(S)']) return map['APP_APP(S)'];
-    if (r.includes('APP(S)') && map['APP(S)']) return map['APP(S)'];
-    if (r.includes('APP') && map['APP']) return map['APP'];
+    // Walk the map's own keys in defined order and use includes() for each.
+    // includes() naturally covers the exact-match case too (r === key implies
+    // r.includes(key)), and also covers a 'MOD_' prefix (e.g. 'MOD_ADC1')
+    // without needing to slice it off first — so no separate exact-match
+    // step or manual substring ordering is needed; the map's own key order
+    // is the priority order (more specific keys should simply be defined
+    // earlier in STATION_ATS_UNIT_MAP for a given station).
+    for (const key of Object.keys(map)) {
+      if (r.includes(key)) return map[key];
+    }
 
     // Return first value in the map as station-specific default
     const firstVal = Object.values(map)[0];
