@@ -13,6 +13,20 @@ chrome.action.onClicked.addListener((tab) => {
 // ── Message router ────────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
+  // Content script asking to open the side panel (e.g. "Add to Queue" click
+  // on the AAI page) — must be called synchronously here, off the incoming
+  // user-gesture-carrying message, or Chrome will reject it.
+  if (msg.type === 'OPEN_SIDE_PANEL') {
+    const tabId = sender?.tab?.id;
+    if (tabId != null) {
+      chrome.sidePanel.open({ tabId }).catch((err) => {
+        console.warn('[DGCA SW] Could not open side panel:', err);
+      });
+    }
+    sendResponse({ ok: true });
+    return;
+  }
+
   // Source page queued rows → notify side panel if open
   if (msg.type === 'ROWS_QUEUED') {
     chrome.runtime.sendMessage({ type: 'ROWS_READY', count: msg.count })

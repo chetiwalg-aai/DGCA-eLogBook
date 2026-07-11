@@ -11,6 +11,66 @@
   let _offset = 0;
   let _selectedRows = {};
 
+  /**
+   * Read the currently logged-in AAI user from the top navbar.
+   *   <li id="ew-navbar-end" ...> first <li> holds the display name next to
+   *   the "Welcome" tooltip icon (e.g. "Gaurav Chetiwal").
+   *   The separate user-icon dropdown (#ew-nav-link-user) holds the stable
+   *   login id in its dropdown-header (e.g. "chetiwalg") — this is the more
+   *   reliable identifier since two people could in theory share a display
+   *   name, so it's used as the primary comparison key with the friendly
+   *   name kept purely for display.
+   */
+  function getAaiUser() {
+    try {
+      let loginId = '';
+      const header = document.querySelector('.ew-user-dropdown .dropdown-header');
+      if (header) loginId = header.textContent.replace(/\s+/g, ' ').trim();
+
+      let name = '';
+      const nameEl = document.querySelector('#ew-navbar-end .ew-tooltip[data-bs-original-title="Welcome"]');
+      if (nameEl) name = nameEl.textContent.replace(/\s+/g, ' ').trim();
+
+      if (!loginId && !name) return null;
+      return { name: name || loginId, loginId: loginId || name };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /** True when the queue already holds rows tagged to a different AAI user. */
+  function isUserMismatch(currentUser, queueUser, existingRowCount) {
+    return !!(
+      existingRowCount > 0 &&
+      queueUser && currentUser &&
+      queueUser.loginId && currentUser.loginId &&
+      queueUser.loginId !== currentUser.loginId
+    );
+  }
+
+  /**
+   * Keep the "Add to Queue" toolbar warned if the logged-in AAI user no
+   * longer matches whoever the current queue was built for. Purely a
+   * heads-up — the actual block happens in onSendClick.
+   */
+  async function refreshUserMismatchIndicator() {
+    try {
+      const warnEl = document.getElementById('dgca-user-warn');
+      if (!warnEl) return;
+      const data = await chrome.storage.session.get(['dgca_pending_rows', 'dgca_queue_user']);
+      const existing = data?.dgca_pending_rows || [];
+      const queueUser = data?.dgca_queue_user || null;
+      const current = getAaiUser();
+
+      if (isUserMismatch(current, queueUser, existing.length)) {
+        warnEl.textContent = `⚠ Queue is for ${queueUser.name} — clear it before adding as ${current.name}`;
+        warnEl.style.display = 'inline-block';
+      } else {
+        warnEl.style.display = 'none';
+      }
+    } catch (_) { }
+  }
+
   function cellText(tr, origColIdx) {
     const td = tr.cells[origColIdx + _offset];
     return td ? td.innerText.trim() : '';
@@ -169,8 +229,20 @@
     badge.textContent = '0 selected';
     toolbar.appendChild(badge);
 
+    const userWarn = document.createElement('span');
+    userWarn.id = 'dgca-user-warn';
+    userWarn.style.cssText = 'margin-left:8px;font-size:12px;color:#c0392b;font-weight:700;line-height:2.2;display:none;';
+    toolbar.appendChild(userWarn);
+
     document.getElementById('dgca-send-btn').addEventListener('click', onSendClick);
     _buttonInjected = true;
+
+    refreshUserMismatchIndicator();
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'session' && (changes.dgca_pending_rows || changes.dgca_queue_user)) {
+        refreshUserMismatchIndicator();
+      }
+    });
   }
 
   function injectCheckboxesIntoBody(tableBody) {
@@ -278,17 +350,43 @@
   }
 
   function onSendClick() {
+    // Ask the background to open the side panel for this tab. Must be fired
+    // synchronously, right at the start of the click handler — the "transient
+    // user activation" that makes chrome.sidePanel.open() legal only survives
+    // a few seconds and can be spent by awaiting storage calls first. Safe to
+    // call even if the panel is already open (no-op / just focuses it).
+    try { chrome.runtime.sendMessage({ type: 'OPEN_SIDE_PANEL' }); } catch (_) { }
+
     const newRows = Object.values(_selectedRows);
     if (newRows.length === 0) {
       alert('No rows selected. Please check at least one row across any page.');
       return;
     }
 
-    chrome.storage.session.get(['dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors'])
+    const currentUser = getAaiUser();
+
+    chrome.storage.session.get(['dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors', 'dgca_queue_user'])
       .then((data) => {
         const existing = data?.dgca_pending_rows || [];
         const existingStatus = data?.dgca_row_status || [];
         const existingErrors = data?.dgca_row_errors || {};
+        const queueUser = data?.dgca_queue_user || null;
+
+        // Guard against mixing rows scraped under two different AAI logins
+        // into the same queue/session — the DGCA-side ATCOL/instructor data
+        // would otherwise silently be attributed to the wrong person.
+        if (isUserMismatch(currentUser, queueUser, existing.length)) {
+          refreshUserMismatchIndicator();
+          alert(
+            `⚠ AAI user has changed.\n\n` +
+            `The current queue was built while logged in as "${queueUser.name}", ` +
+            `but you are now logged in as "${currentUser.name}".\n\n` +
+            `Please open the side panel and clear the queue first, then re-select ` +
+            `and add rows for "${currentUser.name}".`
+          );
+          return;
+        }
+
         const existingMap = {};
         existing.forEach((r, i) => { existingMap[r.id] = { row: r, index: i }; });
 
@@ -303,13 +401,19 @@
         const { rows: merged, statuses: mergedStatus, errors: mergedErrors } =
           sortQueue(rawMerged, rawStatuses, existingErrors);
 
+        // Tag the queue with whoever it's for. Keep the existing tag if for
+        // some reason the current page couldn't resolve a user (don't erase
+        // a known-good tag with a null read).
+        const nextQueueUser = currentUser || queueUser || null;
+
         return chrome.storage.session.set({
           dgca_pending_rows: merged,
           dgca_row_status: mergedStatus,
           dgca_row_errors: mergedErrors,
           dgca_session_ts: Date.now(),
+          dgca_queue_user: nextQueueUser,
         }).then(() => {
-          chrome.runtime.sendMessage({ type: 'ROWS_QUEUED', count: merged.length });
+          chrome.runtime.sendMessage({ type: 'ROWS_QUEUED', count: merged.length, user: nextQueueUser });
           const btn = document.getElementById('dgca-send-btn');
           if (btn) {
             const orig = btn.textContent;
@@ -318,6 +422,7 @@
             setTimeout(() => { btn.textContent = orig; btn.style.background = ''; }, 3000);
           }
           updateSelectionBadge();
+          refreshUserMismatchIndicator();
         });
       })
       .catch((err) => {
@@ -364,6 +469,13 @@
     _offset = 0;
     injectCheckboxesIntoBody(tableBody);
     startObserving(tableBody);
+
+    // Also re-check periodically: the AAI user can change (logout/login in
+    // the same tab) without touching the pending-rows queue at all, so the
+    // storage.onChanged listener alone wouldn't catch it.
+    if (!window.__dgcaUserWatch) {
+      window.__dgcaUserWatch = setInterval(refreshUserMismatchIndicator, 5000);
+    }
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setup);

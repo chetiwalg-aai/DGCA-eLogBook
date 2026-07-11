@@ -75,6 +75,24 @@ header {
   margin-bottom: 8px;
 }
 .queue-count { font-weight: 600; color: #4fc3f7; }
+
+/* ── Queue user tag ───────────────────────────────────────────────────────── */
+.queue-user-info {
+  font-size: 11px;
+  color: #999;
+  padding: 0 0 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #2a2a3e;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.queue-user-info strong { color: #4fc3f7; font-weight: 700; }
+.queue-user-info .queue-user-login { color: #666; }
+.queue-user-info--mismatch {
+  color: #ef5350;
+}
+.queue-user-info--mismatch strong { color: #ef5350; }
 .queue-preview { display: flex; flex-direction: column; gap: 4px; }
 .preview-row {
   display: flex;
@@ -165,21 +183,34 @@ header {
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  transition: opacity 0.15s, filter 0.15s;
+  transition: opacity 0.15s, filter 0.15s, background-color 0.15s, border-color 0.15s, transform 0.05s;
 }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn:not(:disabled):hover { filter: brightness(1.15); }
+.btn:not(:disabled):active { transform: translateY(1px); }
 .btn--primary { background: #4fc3f7; color: #0a0a14; }
 .btn--danger  { background: #ef5350; color: #fff; }
 .btn--ghost   {
-  background: transparent;
-  border: 1px solid #2a2a3e;
-  color: #aaa;
+  background: #23233a;
+  border: 1px solid #4a4a6e;
+  color: #cfd3e0;
+  box-shadow: 0 1px 0 rgba(0,0,0,0.2);
+}
+.btn--ghost:not(:disabled):hover {
+  background: #2c2c48;
+  border-color: #6a6a9e;
+  color: #fff;
 }
 .btn--ghost-success {
-  background: transparent;
-  border: 1px solid #1a4a2a;
-  color: #4caf50;
+  background: #17281c;
+  border: 1px solid #2e6b3e;
+  color: #6fcf82;
+  box-shadow: 0 1px 0 rgba(0,0,0,0.2);
+}
+.btn--ghost-success:not(:disabled):hover {
+  background: #1c3322;
+  border-color: #3e8c53;
+  color: #8ee6a0;
 }
 .btn--sm { padding: 4px 10px; font-size: 12px; }
 

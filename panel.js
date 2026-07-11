@@ -124,6 +124,7 @@ const state = {
   sessionRunning: false,
   dgcaTabReady: false,
   useAts: false,
+  queueUser: null, // { name, loginId } — whoever the current AAI queue was built for
 };
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
@@ -146,6 +147,7 @@ const wsoAtsLabel = $('wso-ats-label');
 const btnCheckDgca = $('btn-check-dgca');
 const rowListSection = $('row-list-section');
 const rowList = $('row-list');
+const queueUserInfo = $('queue-user-info');
 const errorModal = $('error-modal');
 const errorBackdrop = $('error-backdrop');
 const errorModalRowNum = $('error-modal-row-num');
@@ -186,10 +188,11 @@ function getPillLabel(status) {
 // Everything lives in chrome.storage.session — clears automatically on browser close.
 function loadFromStorage() {
   chrome.storage.session.get(
-    ['dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors', 'dgca_session_ts', 'dgca_use_ats']
+    ['dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors', 'dgca_session_ts', 'dgca_use_ats', 'dgca_queue_user']
   ).then((data) => {
     state.useAts = !!(data?.dgca_use_ats);
     wsoAtsToggle.checked = state.useAts;
+    state.queueUser = data?.dgca_queue_user || null;
 
     const rows = data?.dgca_pending_rows || [];
     const statuses = data?.dgca_row_status || [];
@@ -204,6 +207,7 @@ function loadFromStorage() {
 
     if (rows.length > 0) {
       renderQueueSection(state.rows);
+      renderQueueUser(state.queueUser);
       renderRowList(state.rows, state.statuses, state.errors);
       checkDgcaTab();
     } else {
@@ -211,8 +215,25 @@ function loadFromStorage() {
       rowListSection.style.display = 'none';
       btnStart.disabled = true;
       setBadge('Idle', 'idle');
+      renderQueueUser(null);
     }
   }).catch(() => { });
+}
+
+// ── Render the "queued for" user tag ──────────────────────────────────────────
+function renderQueueUser(user) {
+  if (!queueUserInfo) return;
+  if (!user || (!user.name && !user.loginId)) {
+    queueUserInfo.style.display = 'none';
+    return;
+  }
+  const name = user.name || user.loginId;
+  const loginBadge = (user.loginId && user.loginId !== name)
+    ? ` <span class="queue-user-login">(${escHtml(user.loginId)})</span>`
+    : '';
+  queueUserInfo.className = 'queue-user-info';
+  queueUserInfo.innerHTML = `👤 Queued for <strong>${escHtml(name)}</strong>${loginBadge}`;
+  queueUserInfo.style.display = 'flex';
 }
 
 // ── Render queue section (count only) ─────────────────────────────────────────
@@ -517,15 +538,17 @@ btnClear.addEventListener('click', () => {
     return;
   }
   chrome.storage.session.remove([
-    'dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors', 'dgca_session_ts'
+    'dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors', 'dgca_session_ts', 'dgca_queue_user'
   ]).then(() => {
     state.rows = [];
     state.statuses = [];
     state.errors = {};
+    state.queueUser = null;
     queueSection.style.display = 'none';
     rowListSection.style.display = 'none';
     btnStart.disabled = true;
     setBadge('Idle', 'idle');
+    renderQueueUser(null);
     log('Queue cleared.');
   }).catch(() => { });
 });
@@ -592,7 +615,7 @@ chrome.runtime.onMessage.addListener((msg) => {
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'session' && changes.dgca_pending_rows) {
+  if (area === 'session' && (changes.dgca_pending_rows || changes.dgca_queue_user)) {
     loadFromStorage();
   }
 });
