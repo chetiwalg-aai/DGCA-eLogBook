@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "DGCA eLogBook Automator",
-  "version": "2.1.0",
-  "description": "Scrape AAI MyLogBook and auto-fill DGCA eLogBook entries",
+  "version": "2.3.0",
+  "description": "Scrape AAI MyLogBook or EGcAexport and auto-fill DGCA eLogBook entries",
   "permissions": [
     "activeTab",
     "scripting",
@@ -20,7 +20,12 @@
   "content_scripts": [
     {
       "matches": ["https://iamatc.aai.aero/atc/MyLogBook*"],
-      "js": ["shared.js", "source-injector.js"],
+      "js": ["shared.js", "injector-logbook.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://iamatc.aai.aero/atc/EGcAexport*"],
+      "js": ["shared.js", "injector-egcaexport.js"],
       "run_at": "document_idle"
     },
     {
@@ -31,7 +36,7 @@
     },
     {
       "matches": ["https://www.dgca.gov.in/*"],
-      "js": ["shared.js", "dgca-filler.js"],
+      "js": ["shared.js", "dgca-filler-common.js", "dgca-filler-logbook.js", "dgca-filler-egcaexport.js"],
       "run_at": "document_idle"
     }
   ],

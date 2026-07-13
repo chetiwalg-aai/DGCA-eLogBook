@@ -9,7 +9,7 @@
 (function () {
   'use strict';
 
-  const EVENT_NAME = '__dgca_alert_captured__';
+  const EVENT_NAME = 'dgca_alert_captured'; // must match ALERT_EVENT_NAME in dgca-filler-common.js
 
   function emit(msg, source) {
     try {

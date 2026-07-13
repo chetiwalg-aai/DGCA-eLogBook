@@ -30,12 +30,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Source page queued rows → notify side panel if open
   if (msg.type === 'ROWS_QUEUED') {
     chrome.runtime.sendMessage({ type: 'ROWS_READY', count: msg.count })
-      .catch(() => {});
+      .catch(() => { });
     sendResponse({ ok: true });
     return;
   }
 
   // Side panel wants to start filling → find DGCA tab and relay rows
+  // Inside service-worker.js, update the REQUEST_START_FILLING block:
+
   if (msg.type === 'REQUEST_START_FILLING') {
     chrome.storage.session.get(['dgca_pending_rows'])
       .then(async (data) => {
@@ -44,14 +46,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: false, error: 'No rows queued.' });
           return;
         }
-
         const dgcaTab = await findDgcaTab();
         if (!dgcaTab) {
           sendResponse({ ok: false, error: 'DGCA portal tab not found. Please open it.' });
           return;
         }
 
-        chrome.tabs.sendMessage(dgcaTab.id, { type: 'START_FILLING', rows }, (resp) => {
+        // Route to the correct filler based on the source of the first row
+        const source = rows[0].source || 'mylogbook';
+        const messageType = source === 'egcaexport' ? 'START_FILLING_EGCA' : 'START_FILLING_MYLOGBOOK';
+
+        chrome.tabs.sendMessage(dgcaTab.id, { type: messageType, rows }, (resp) => {
           if (chrome.runtime.lastError) {
             sendResponse({ ok: false, error: 'Could not reach DGCA tab. Make sure you are on the entry page.' });
           } else {
@@ -76,7 +81,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // DGCA filler sending progress → forward to side panel
   if (msg.type === 'FILL_PROGRESS') {
-    chrome.runtime.sendMessage(msg).catch(() => {});
+    chrome.runtime.sendMessage(msg).catch(() => { });
     sendResponse({ ok: true });
     return;
   }
@@ -107,10 +112,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 //   error (at least one row 'error', nothing running)   → red
 //   done (every row 'submitted')                        → green
 const BADGE_COLOR = {
-  queued:  '#e53935', // red
+  queued: '#e53935', // red
   running: '#2196f3', // blue
-  error:   '#ef5350', // red
-  done:    '#4caf50', // green
+  error: '#ef5350', // red
+  done: '#4caf50', // green
 };
 
 function computeBadgeState(rows, statuses) {
@@ -139,7 +144,7 @@ async function refreshBadge() {
       await chrome.action.setBadgeBackgroundColor({ color });
       // setBadgeTextColor is only available on newer Chrome — feature-detect.
       if (typeof chrome.action.setBadgeTextColor === 'function') {
-        await chrome.action.setBadgeTextColor({ color: '#ffffff' }).catch(() => {});
+        await chrome.action.setBadgeTextColor({ color: '#ffffff' }).catch(() => { });
       }
     }
   } catch (err) {
