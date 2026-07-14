@@ -6,7 +6,7 @@ Handles filling for rows where source === 'egcaexport'
 (function () {
   'use strict';
   const {
-    parseDateDMY, formatDDMMYYYY, sleep,
+    parseDateDMY, formatDDMMYYYY, sleep, addOneDay, 
     DUTY_TYPE,
   } = window.DGCA;
   const {
@@ -37,8 +37,19 @@ Handles filling for rows where source === 'egcaexport'
 
     const { d, m, y } = parseDateDMY(raw.fromDate);
     const fromDateStr = formatDDMMYYYY(d, m, y);
-    const { d: d2, m: m2, y: y2 } = parseDateDMY(raw.toDate);
-    const toDateStr = formatDDMMYYYY(d2, m2, y2);
+
+    let toDate = raw.toDate;
+    let toDateStr = fromDateStr;
+
+    if (raw.fromDate === raw.toDate && timeTo === "00:00") {
+    const { d, m, y } = parseDateDMY(toDate);
+    const n = addOneDay(d, m, y);
+    toDateStr = formatDDMMYYYY(n.d, n.m, n.y);
+    } else {
+
+    const { d: d2, m: m2, y: y2 } = parseDateDMY(toDate);
+    toDateStr = formatDDMMYYYY(d2, m2, y2);
+    }
 
     await ensureCheckbox(SEL.briefingCheckbox, true);
     await setDatePickerValue(SEL.fromDate, fromDateStr);
