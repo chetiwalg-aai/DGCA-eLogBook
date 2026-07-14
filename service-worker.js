@@ -1,108 +1,103 @@
 // ── Allow content scripts to access session storage directly ─────────────────
 chrome.storage.session.setAccessLevel({
-  accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS',
+	accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS',
 }).catch((err) => {
-  console.warn('[DGCA SW] Could not set session access level:', err);
+	console.warn('[DGCA SW] Could not set session access level:', err);
 });
 
 // ── Open side panel when extension icon is clicked ───────────────────────────
 chrome.action.onClicked.addListener((tab) => {
-  chrome.sidePanel.open({ tabId: tab.id });
+	chrome.sidePanel.open({ tabId: tab.id });
 });
 
 // ── Message router ────────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
-  // Content script asking to open the side panel (e.g. "Add to Queue" click
-  // on the AAI page) — must be called synchronously here, off the incoming
-  // user-gesture-carrying message, or Chrome will reject it.
-  if (msg.type === 'OPEN_SIDE_PANEL') {
-    const tabId = sender?.tab?.id;
-    if (tabId != null) {
-      chrome.sidePanel.open({ tabId }).catch((err) => {
-        console.warn('[DGCA SW] Could not open side panel:', err);
-      });
-    }
-    sendResponse({ ok: true });
-    return;
-  }
+	// Content script asking to open the side panel (e.g. "Add to Queue" click
+	// on the AAI page) — must be called synchronously here, off the incoming
+	// user-gesture-carrying message, or Chrome will reject it.
+	if (msg.type === 'OPEN_SIDE_PANEL') {
+		const tabId = sender?.tab?.id;
+		if (tabId != null) {
+			chrome.sidePanel.open({ tabId }).catch((err) => {
+				console.warn('[DGCA SW] Could not open side panel:', err);
+			});
+		}
+		sendResponse({ ok: true });
+		return;
+	}
 
-  // Source page queued rows → notify side panel if open
-  if (msg.type === 'ROWS_QUEUED') {
-    chrome.runtime.sendMessage({ type: 'ROWS_READY', count: msg.count })
-      .catch(() => { });
-    sendResponse({ ok: true });
-    return;
-  }
+	// Source page queued rows → notify side panel if open
+	if (msg.type === 'ROWS_QUEUED') {
+		chrome.runtime.sendMessage({ type: 'ROWS_READY', count: msg.count })
+			.catch(() => { });
+		sendResponse({ ok: true });
+		return;
+	}
 
-  // Side panel wants to start filling → find DGCA tab and relay rows
-  // Inside service-worker.js, update the REQUEST_START_FILLING block:
+	// Side panel wants to start filling → find DGCA tab and relay rows.
+	// Only the EGCA-export source/filler exists today, so no routing needed.
+	if (msg.type === 'REQUEST_START_FILLING') {
+		chrome.storage.session.get(['dgca_pending_rows'])
+			.then(async (data) => {
+				const rows = data?.dgca_pending_rows || [];
+				if (rows.length === 0) {
+					sendResponse({ ok: false, error: 'No rows queued.' });
+					return;
+				}
+				const dgcaTab = await findDgcaTab();
+				if (!dgcaTab) {
+					sendResponse({ ok: false, error: 'DGCA portal tab not found. Please open it.' });
+					return;
+				}
 
-  if (msg.type === 'REQUEST_START_FILLING') {
-    chrome.storage.session.get(['dgca_pending_rows'])
-      .then(async (data) => {
-        const rows = data?.dgca_pending_rows || [];
-        if (rows.length === 0) {
-          sendResponse({ ok: false, error: 'No rows queued.' });
-          return;
-        }
-        const dgcaTab = await findDgcaTab();
-        if (!dgcaTab) {
-          sendResponse({ ok: false, error: 'DGCA portal tab not found. Please open it.' });
-          return;
-        }
+				chrome.tabs.sendMessage(dgcaTab.id, { type: 'START_FILLING', rows }, (resp) => {
+					if (chrome.runtime.lastError) {
+						sendResponse({ ok: false, error: 'Could not reach DGCA tab. Make sure you are on the entry page.' });
+					} else {
+						sendResponse(resp);
+					}
+				});
+			})
+			.catch((err) => {
+				sendResponse({ ok: false, error: `Storage error: ${err.message}` });
+			});
+		return true; // async
+	}
 
-        // Route to the correct filler based on the source of the first row
-        const source = rows[0].source || 'mylogbook';
-        const messageType = source === 'egcaexport' ? 'START_FILLING_EGCA' : 'START_FILLING_MYLOGBOOK';
+	// Side panel wants to abort
+	if (msg.type === 'REQUEST_ABORT') {
+		findDgcaTab().then(tab => {
+			if (tab) chrome.tabs.sendMessage(tab.id, { type: 'ABORT_SESSION' });
+		});
+		sendResponse({ ok: true });
+		return;
+	}
 
-        chrome.tabs.sendMessage(dgcaTab.id, { type: messageType, rows }, (resp) => {
-          if (chrome.runtime.lastError) {
-            sendResponse({ ok: false, error: 'Could not reach DGCA tab. Make sure you are on the entry page.' });
-          } else {
-            sendResponse(resp);
-          }
-        });
-      })
-      .catch((err) => {
-        sendResponse({ ok: false, error: `Storage error: ${err.message}` });
-      });
-    return true; // async
-  }
+	// DGCA filler sending progress → forward to side panel
+	if (msg.type === 'FILL_PROGRESS') {
+		chrome.runtime.sendMessage(msg).catch(() => { });
+		sendResponse({ ok: true });
+		return;
+	}
 
-  // Side panel wants to abort
-  if (msg.type === 'REQUEST_ABORT') {
-    findDgcaTab().then(tab => {
-      if (tab) chrome.tabs.sendMessage(tab.id, { type: 'ABORT_SESSION' });
-    });
-    sendResponse({ ok: true });
-    return;
-  }
-
-  // DGCA filler sending progress → forward to side panel
-  if (msg.type === 'FILL_PROGRESS') {
-    chrome.runtime.sendMessage(msg).catch(() => { });
-    sendResponse({ ok: true });
-    return;
-  }
-
-  // Side panel pinging DGCA tab to check readiness
-  if (msg.type === 'PING_DGCA_TAB') {
-    findDgcaTab().then(tab => {
-      if (!tab) {
-        sendResponse({ ok: false, error: 'No DGCA tab found.' });
-        return;
-      }
-      chrome.tabs.sendMessage(tab.id, { type: 'PING' }, (resp) => {
-        if (chrome.runtime.lastError) {
-          sendResponse({ ok: false, error: 'DGCA content script not responding.' });
-        } else {
-          sendResponse({ ok: true, url: resp?.url });
-        }
-      });
-    });
-    return true;
-  }
+	// Side panel pinging DGCA tab to check readiness
+	if (msg.type === 'PING_DGCA_TAB') {
+		findDgcaTab().then(tab => {
+			if (!tab) {
+				sendResponse({ ok: false, error: 'No DGCA tab found.' });
+				return;
+			}
+			chrome.tabs.sendMessage(tab.id, { type: 'PING' }, (resp) => {
+				if (chrome.runtime.lastError) {
+					sendResponse({ ok: false, error: 'DGCA content script not responding.' });
+				} else {
+					sendResponse({ ok: true, url: resp?.url, onEntryPage: !!resp?.onEntryPage });
+				}
+			});
+		});
+		return true;
+	}
 });
 
 // ── Extension icon badge: queue count, color-coded by status ─────────────────
@@ -112,52 +107,52 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 //   error (at least one row 'error', nothing running)   → red
 //   done (every row 'submitted')                        → green
 const BADGE_COLOR = {
-  queued: '#e53935', // red
-  running: '#2196f3', // blue
-  error: '#ef5350', // red
-  done: '#4caf50', // green
+	queued: '#e53935', // red
+	running: '#2196f3', // blue
+	error: '#ef5350', // red
+	done: '#4caf50', // green
 };
 
 function computeBadgeState(rows, statuses) {
-  const count = rows.length;
-  if (count === 0) return { text: '', color: null };
+	const count = rows.length;
+	if (count === 0) return { text: '', color: null };
 
-  let status;
-  if (statuses.includes('filling')) status = 'running';
-  else if (statuses.includes('error')) status = 'error';
-  else if (statuses.length > 0 && statuses.every(s => s === 'submitted')) status = 'done';
-  else status = 'queued';
+	let status;
+	if (statuses.includes('filling')) status = 'running';
+	else if (statuses.includes('error')) status = 'error';
+	else if (statuses.length > 0 && statuses.every(s => s === 'submitted')) status = 'done';
+	else status = 'queued';
 
-  const text = count > 99 ? '99+' : String(count);
-  return { text, color: BADGE_COLOR[status] };
+	const text = count > 99 ? '99+' : String(count);
+	return { text, color: BADGE_COLOR[status] };
 }
 
 async function refreshBadge() {
-  try {
-    const data = await chrome.storage.session.get(['dgca_pending_rows', 'dgca_row_status']);
-    const rows = data?.dgca_pending_rows || [];
-    const statuses = data?.dgca_row_status || [];
-    const { text, color } = computeBadgeState(rows, statuses);
+	try {
+		const data = await chrome.storage.session.get(['dgca_pending_rows', 'dgca_row_status']);
+		const rows = data?.dgca_pending_rows || [];
+		const statuses = data?.dgca_row_status || [];
+		const { text, color } = computeBadgeState(rows, statuses);
 
-    await chrome.action.setBadgeText({ text });
-    if (color) {
-      await chrome.action.setBadgeBackgroundColor({ color });
-      // setBadgeTextColor is only available on newer Chrome — feature-detect.
-      if (typeof chrome.action.setBadgeTextColor === 'function') {
-        await chrome.action.setBadgeTextColor({ color: '#ffffff' }).catch(() => { });
-      }
-    }
-  } catch (err) {
-    console.warn('[DGCA SW] Could not refresh badge:', err);
-  }
+		await chrome.action.setBadgeText({ text });
+		if (color) {
+			await chrome.action.setBadgeBackgroundColor({ color });
+			// setBadgeTextColor is only available on newer Chrome — feature-detect.
+			if (typeof chrome.action.setBadgeTextColor === 'function') {
+				await chrome.action.setBadgeTextColor({ color: '#ffffff' }).catch(() => { });
+			}
+		}
+	} catch (err) {
+		console.warn('[DGCA SW] Could not refresh badge:', err);
+	}
 }
 
 // Recompute whenever the queue or row statuses change (covers session start,
 // per-row progress, abort, clear, and clear-done — all of which write to
 // these same storage keys).
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== 'session') return;
-  if (changes.dgca_pending_rows || changes.dgca_row_status) refreshBadge();
+	if (area !== 'session') return;
+	if (changes.dgca_pending_rows || changes.dgca_row_status) refreshBadge();
 });
 
 // Recompute on service-worker startup / extension install so the badge is
@@ -168,6 +163,6 @@ refreshBadge();
 
 // ── Find the DGCA portal tab ──────────────────────────────────────────────────
 async function findDgcaTab() {
-  const tabs = await chrome.tabs.query({ url: 'https://www.dgca.gov.in/*' });
-  return tabs.length > 0 ? tabs[tabs.length - 1] : null;
+	const tabs = await chrome.tabs.query({ url: 'https://www.dgca.gov.in/*' });
+	return tabs.length > 0 ? tabs[tabs.length - 1] : null;
 }

@@ -1,59 +1,69 @@
 {
-  "manifest_version": 3,
-  "name": "DGCA eLogBook Automator",
-  "version": "1.2.0",
-  "description": "Scrape AAI MyLogBook or EGcAexport and auto-fill DGCA eLogBook entries",
-  "permissions": [
-    "activeTab",
-    "scripting",
-    "storage",
-    "tabs",
-    "sidePanel"
-  ],
-  "host_permissions": [
-    "https://iamatc.aai.aero/*",
-    "https://www.dgca.gov.in/*"
-  ],
-  "background": {
-    "service_worker": "service-worker.js"
-  },
-  "content_scripts": [
-    {
-      "matches": ["https://iamatc.aai.aero/atc/MyLogBook*"],
-      "js": ["shared.js", "injector-logbook.js"],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": ["https://iamatc.aai.aero/atc/EGcAexport*"],
-      "js": ["shared.js", "injector-egcaexport.js"],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": ["https://www.dgca.gov.in/*"],
-      "js": ["alert-interceptor.js"],
-      "world": "MAIN",
-      "run_at": "document_start"
-    },
-    {
-      "matches": ["https://www.dgca.gov.in/*"],
-      "js": ["shared.js", "dgca-filler-common.js", "dgca-filler-logbook.js", "dgca-filler-egcaexport.js"],
-      "run_at": "document_idle"
-    }
-  ],
-  "side_panel": {
-    "default_path": "panel.html"
-  },
-  "action": {
-    "default_title": "DGCA eLogBook Automator",
-    "default_icon": {
-      "16": "icons/icon16.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
-    }
-  },
-  "icons": {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
-  }
+	"manifest_version": 3,
+	"name": "DGCA eLogBook Automator",
+	"version": "1.2.0",
+	"description": "Scrape AAI MyLogBook or EGcAexport and auto-fill DGCA eLogBook entries",
+	"permissions": [
+		"activeTab",
+		"scripting",
+		"storage",
+		"tabs",
+		"sidePanel"
+	],
+	"host_permissions": [
+		"https://iamatc.aai.aero/*",
+		"https://www.dgca.gov.in/*"
+	],
+	"background": {
+		"service_worker": "service-worker.js"
+	},
+	"content_scripts": [
+		{
+			"matches": [
+				"https://iamatc.aai.aero/atc/EGcAexport*"
+			],
+			"js": [
+				"shared.js",
+				"injector-egcaexport.js"
+			],
+			"run_at": "document_idle"
+		},
+		{
+			"matches": [
+				"https://www.dgca.gov.in/*"
+			],
+			"js": [
+				"alert-interceptor.js"
+			],
+			"world": "MAIN",
+			"run_at": "document_start"
+		},
+		{
+			"matches": [
+				"https://www.dgca.gov.in/*"
+			],
+			"js": [
+				"shared.js",
+				"dgca-filler-common.js",
+				"dgca-filler-egcaexport.js"
+			],
+			"run_at": "document_idle"
+		}
+	],
+	"side_panel": {
+		"default_path": "panel.html"
+	},
+	"action": {
+		"default_title": "DGCA eLogBook Automator",
+		"default_icon": {
+			"16": "icons/icon16.png",
+			"48": "icons/icon48.png",
+			"128": "icons/icon128.png"
+		}
+	},
+	"icons": {
+		"16": "icons/icon16.png",
+		"48": "icons/icon48.png",
+		"128": "icons/icon128.png"
+	}
 }

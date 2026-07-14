@@ -1,85 +1,92 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>DGCA eLogBook</title>
-  <link rel="stylesheet" href="panel.css">
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>DGCA eLogBook</title>
+	<link rel="stylesheet" href="panel.css">
 </head>
+
 <body>
-  <header>
-    <div class="logo">✈ DGCA eLogBook</div>
-    <span id="badge" class="badge badge--idle">Idle</span>
-  </header>
+	<header>
+		<div class="logo">✈ DGCA eLogBook</div>
+		<span id="badge" class="badge badge--idle">Idle</span>
+	</header>
 
-  <main>
-    <details class="card instructions-toggle" open>
-      <summary>How to use ▸</summary>
-      <div class="hint" style="margin-top: 8px;">
-        1. Go to <a href="https://iamatc.aai.aero/atc/MyLogBook" target="_blank">AAI MyLogBook</a>
-           or <a href="https://iamatc.aai.aero/atc/EGcAexport" target="_blank">EGCA Export</a><br>
-        2. Check rows you want to send<br>
-        3. Click "✈ Add to Queue ▶"<br>
-        4. Log into DGCA portal and navigate to the logbook entry page<br>
-        5. Come back here and click <strong>Start Filling</strong>
-      </div>
-    </details>
+	<main>
+		<details class="card instructions-toggle">
+			<summary>How to use ▸</summary>
+			<div class="hint" style="margin-top: 8px;">
+				1. Go to <a href="https://iamatc.aai.aero/atc/EGcAexport" target="_blank">EGCA Export</a><br>
+				2. Check rows you want to send<br>
+				3. Click "✈ Add to DGCA Queue ▶"<br>
+				4. Log into DGCA portal and navigate to the logbook entry page<br>
+				5. Come back here and click <strong>Start Filling</strong>
+			</div>
+		</details>
 
-    <div id="queue-section" class="card" style="display: none;">
-      <div class="queue-info">
-        <span id="queue-count" class="queue-count">0 rows queued</span>
-        <span id="source-badge" class="source-badge">Source: Unknown</span>
-      </div>
-      <div id="queue-user-info" class="queue-user-info" style="display: none;"></div>
-      <div class="wso-toggle">
-        <input type="checkbox" id="wso-ats-toggle">
-        <label id="wso-ats-label" for="wso-ats-toggle">
-          Use <strong>ATS</strong> as WSO/EGCA-Id
-          <span style="color:#555;font-size:10px;">(alt: vijpwso)</span>
-        </label>
-      </div>
-      <div class="tab-status tab-status--unknown" id="dgca-tab-status">DGCA tab: checking…</div>
-    </div>
+		<div id="queue-section" class="card" style="display: none;">
+			<div class="queue-info">
+				<span id="queue-count" class="queue-count">0 rows queued</span>
+			</div>
+			<div id="queue-user-info" class="queue-user-info" style="display: none;"></div>
+			<div class="wso-toggle">
+				<input type="checkbox" id="wso-ats-toggle">
+				<label id="wso-ats-label" for="wso-ats-toggle">
+					Use <strong>ATS</strong> as EGCA-Id
+				</label>
+			</div>
+			<div class="tab-status-row">
+				<span id="dgca-tab-status" class="tab-status tab-status--unknown">DGCA tab: checking…</span>
+				<button id="btn-check-dgca" class="btn btn--ghost btn--sm">Check ▶</button>
+			</div>
+		</div>
 
-    <div id="progress-section" class="card" style="display: none;">
-      <div class="progress-info">
-        <span id="progress-text">Starting…</span>
-        <span id="progress-stats"></span>
-      </div>
-      <div class="progress-track">
-        <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
-      </div>
-    </div>
+		<!-- Replace your existing progress-section div with this: -->
+		<div id="progress-section" class="card" style="display:none;">
+			<div class="progress-info">
+				<span id="progress-text" class="queue-count">Starting…</span>
+				<span id="progress-stats" style="font-size:11px;color:#888;"></span>
+			</div>
+			<div class="progress-track">
+				<div id="progress-fill" class="progress-fill"></div>
+			</div>
 
-    <div class="controls">
-      <button id="btn-check-dgca" class="btn btn--ghost btn--sm">Check ▶</button>
-      <button id="btn-start" class="btn btn--primary" disabled>Start Filling</button>
-      <button id="btn-abort" class="btn btn--danger" style="display: none;">■ Abort</button>
-      <button id="btn-clear-success" class="btn btn--ghost-success btn--sm">✓ Clear Done</button>
-      <button id="btn-clear" class="btn btn--ghost btn--sm">Clear All</button>
-    </div>
+			<!-- NEW: Top-level error pill for session/start errors -->
+			<div id="progress-error-pill" class="pill pill--top-error" style="display:none;"
+				title="Click for full error details"></div>
+		</div>
 
-    <div id="row-list-section" style="display: none;">
-      <div class="section-title">Queued Rows</div>
-      <div id="row-list" class="row-list"></div>
-    </div>
+		<div class="controls">
+			<button id="btn-start" class="btn btn--primary" disabled>Start Filling</button>
+			<button id="btn-abort" class="btn btn--danger" style="display: none;">■ Abort</button>
+			<button id="btn-clear-success" class="btn btn--ghost-success">✓ Clear Done</button>
+			<button id="btn-clear" class="btn btn--ghost">Clear All</button>
+		</div>
 
-    <div id="log" class="log"></div>
+		<div id="row-list-section" style="display: none;">
+			<div class="section-title">Queued Rows</div>
+			<div id="row-list" class="row-list"></div>
+		</div>
 
-    <div class="footer-credit">
-      Made with ❤️ and AI by <span class="footer-credit__name">Gaurav Chetiwal</span> © 2026
-    </div>
-  </main>
+		<div id="log" class="log"></div>
 
-  <div id="error-backdrop" class="error-modal" style="display: none;">
-    <div class="error-modal__backdrop"></div>
-    <div class="error-modal__content">
-      <h3>❌ Error — Row <span id="error-modal-row-num"></span></h3>
-      <div id="error-modal-msg" class="error-modal__msg"></div>
-      <button id="error-modal-close" class="btn btn--primary btn--sm">Close</button>
-    </div>
-  </div>
+		<div class="footer-credit">
+			Made with ❤️ by <span class="footer-credit__name">Gaurav Chetiwal</span> © 2026
+		</div>
+	</main>
 
-  <script src="panel.js"></script>
+	<div id="error-backdrop" class="error-modal" style="display: none;">
+		<div class="error-modal__backdrop"></div>
+		<div class="error-modal__content">
+			<h3>❌ Error — Row <span id="error-modal-row-num"></span></h3>
+			<div id="error-modal-msg" class="error-modal__msg"></div>
+			<button id="error-modal-close" class="btn btn--primary btn--sm">Close</button>
+		</div>
+	</div>
+
+	<script src="panel.js"></script>
 </body>
+
 </html>
