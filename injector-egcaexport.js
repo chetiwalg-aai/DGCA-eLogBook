@@ -44,7 +44,7 @@ DGCA-side filler content script reads from.
 			const warnEl = document.getElementById('dgca-user-warn');
 			if (!warnEl) return;
 
-			const data = await chrome.storage.session.get(['dgca_pending_rows', 'dgca_queue_user']);
+			const data = await window.DGCA_STORAGE.get(['dgca_pending_rows', 'dgca_queue_user']);
 			const existing = data?.dgca_pending_rows || [];
 			const queueUser = data?.dgca_queue_user || null;
 			const current = getAaiUser();
@@ -257,7 +257,7 @@ DGCA-side filler content script reads from.
 		_buttonInjected = true;
 		refreshUserMismatchIndicator();
 
-		chrome.storage.onChanged.addListener((changes, area) => {
+		window.DGCA_STORAGE.onChanged((changes, area) => {
 			if (area === 'session' && (changes.dgca_pending_rows || changes.dgca_queue_user)) {
 				refreshUserMismatchIndicator();
 			}
@@ -382,7 +382,7 @@ DGCA-side filler content script reads from.
 
 		const currentUser = getAaiUser();
 
-		chrome.storage.session.get(['dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors', 'dgca_queue_user'])
+		window.DGCA_STORAGE.get(['dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors', 'dgca_queue_user'])
 			.then((data) => {
 				const existing = data?.dgca_pending_rows || [];
 				const existingStatus = data?.dgca_row_status || [];
@@ -410,7 +410,7 @@ DGCA-side filler content script reads from.
 
 				const nextQueueUser = currentUser || queueUser || null;
 
-				return chrome.storage.session.set({
+				return window.DGCA_STORAGE.set({
 					dgca_pending_rows: merged,
 					dgca_row_status: mergedStatus,
 					dgca_row_errors: mergedErrors,

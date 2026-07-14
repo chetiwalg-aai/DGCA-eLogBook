@@ -1,28 +1,85 @@
-// ── Allow content scripts to access session storage directly ─────────────────
-chrome.storage.session.setAccessLevel({
-	accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS',
-}).catch((err) => {
-	console.warn('[DGCA SW] Could not set session access level:', err);
+// ── Cross-browser panel abstraction ───────────────────────────────────────────
+// Chrome: chrome.sidePanel (per-tab, needs an explicit open({tabId}) call).
+// Firefox: chrome.sidebarAction / browser.sidebarAction (per-window, no tabId,
+// and has no setAccessLevel-style restriction on storage.session — content
+// scripts there already have full read/write access by default).
+const IS_FIREFOX = typeof chrome.sidePanel === 'undefined' && typeof chrome.sidebarAction !== 'undefined';
+
+function openPanel(tabId) {
+	if (chrome.sidePanel && typeof chrome.sidePanel.open === 'function') {
+		// Chrome: must be called synchronously within a user-gesture-carrying
+		// listener (onClicked, or the onMessage handler below), with a tabId.
+		return chrome.sidePanel.open({ tabId }).catch((err) => {
+			console.warn('[DGCA SW] Could not open side panel (Chrome):', err);
+		});
+	}
+	if (chrome.sidebarAction && typeof chrome.sidebarAction.open === 'function') {
+		// Firefox: no tabId — sidebarAction is per-window, not per-tab.
+		try {
+			return Promise.resolve(chrome.sidebarAction.open());
+		} catch (err) {
+			console.warn('[DGCA SW] Could not open sidebar (Firefox):', err);
+			return Promise.resolve();
+		}
+	}
+	return Promise.resolve();
+}
+
+// NOTE: content scripts do NOT get direct access to chrome.storage.session on
+// either browser — Chrome blocks it unless setAccessLevel is called, and
+// Firefox has no such escape hatch at all. Rather than rely on that, content
+// scripts go through storage-bridge.js, which relays get/set/remove calls to
+// this background script (see the DGCA_STORAGE_* handlers below).
+
+// ── Open side panel / sidebar when extension icon is clicked ─────────────────
+chrome.action.onClicked.addListener((tab) => {
+	openPanel(tab.id);
 });
 
-// ── Open side panel when extension icon is clicked ───────────────────────────
-chrome.action.onClicked.addListener((tab) => {
-	chrome.sidePanel.open({ tabId: tab.id });
+// ── Storage bridge for content scripts ────────────────────────────────────────
+// Content scripts can't reliably use chrome.storage.session directly on
+// either browser (see storage-bridge.js). The background script is a
+// trusted context on both, so it does the actual reads/writes and relays
+// storage.onChanged out to any listening content scripts.
+chrome.storage.onChanged.addListener((changes, area) => {
+	if (area !== 'session') return;
+	chrome.runtime.sendMessage({ type: 'DGCA_STORAGE_CHANGED', changes, area }).catch(() => { });
 });
 
 // ── Message router ────────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
+	if (msg.type === 'DGCA_STORAGE_GET') {
+		chrome.storage.session.get(msg.keys)
+			.then((value) => sendResponse({ ok: true, value }))
+			.catch((err) => sendResponse({ ok: false, error: err.message }));
+		return true; // async
+	}
+
+	if (msg.type === 'DGCA_STORAGE_SET') {
+		chrome.storage.session.set(msg.items)
+			.then(() => sendResponse({ ok: true }))
+			.catch((err) => sendResponse({ ok: false, error: err.message }));
+		return true; // async
+	}
+
+	if (msg.type === 'DGCA_STORAGE_REMOVE') {
+		chrome.storage.session.remove(msg.keys)
+			.then(() => sendResponse({ ok: true }))
+			.catch((err) => sendResponse({ ok: false, error: err.message }));
+		return true; // async
+	}
+
+
 	// Content script asking to open the side panel (e.g. "Add to Queue" click
 	// on the AAI page) — must be called synchronously here, off the incoming
 	// user-gesture-carrying message, or Chrome will reject it.
 	if (msg.type === 'OPEN_SIDE_PANEL') {
+		// Must be triggered synchronously here, off the incoming message that
+		// itself came from a user-gesture click on the AAI page — both Chrome's
+		// sidePanel.open and Firefox's sidebarAction.open require this.
 		const tabId = sender?.tab?.id;
-		if (tabId != null) {
-			chrome.sidePanel.open({ tabId }).catch((err) => {
-				console.warn('[DGCA SW] Could not open side panel:', err);
-			});
-		}
+		openPanel(tabId);
 		sendResponse({ ok: true });
 		return;
 	}

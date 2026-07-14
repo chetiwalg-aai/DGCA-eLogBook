@@ -154,17 +154,17 @@ values captured from the EGCA export table — no static value maps needed.
 
 		const statuses = rows.map(() => 'pending');
 		const errors = {};
-		const _atsData = await chrome.storage.session.get(['dgca_use_ats']).catch(() => ({}));
+		const _atsData = await window.DGCA_STORAGE.get(['dgca_use_ats']).catch(() => ({}));
 		const useAts = !!(_atsData?.dgca_use_ats);
 
-		await chrome.storage.session.set({ dgca_row_status: statuses });
+		await window.DGCA_STORAGE.set({ dgca_row_status: statuses });
 
 		for (let i = 0; i < rows.length; i++) {
 			if (_aborted) break;
 
 			const row = rows[i];
 			statuses[i] = 'filling';
-			await chrome.storage.session.set({ dgca_row_status: [...statuses] });
+			await window.DGCA_STORAGE.set({ dgca_row_status: [...statuses] });
 			sendProgress({ index: i, total: rows.length, status: 'filling', row });
 
 			try { await resetFields(); } catch (_) { }
@@ -190,7 +190,7 @@ values captured from the EGCA export table — no static value maps needed.
 				sendProgress({ index: i, total: rows.length, status: 'error', error: err.message });
 			}
 
-			await chrome.storage.session.set({ dgca_row_status: [...statuses], dgca_row_errors: { ...errors } });
+			await window.DGCA_STORAGE.set({ dgca_row_status: [...statuses], dgca_row_errors: { ...errors } });
 		}
 
 		_sessionRunning = false;
