@@ -28,7 +28,7 @@ jobs:
         run: echo "version=$(node -p "require('./manifest.json').version")" >> "$GITHUB_OUTPUT"
 
       - name: Lint extension
-        run: web-ext lint --source-dir=. --ignore-files=updates.json
+        run: web-ext lint --source-dir=. --self-hosted --ignore-files=updates.json
 
       - name: Sign with Mozilla (unlisted / self-distribution)
         env:
@@ -40,6 +40,7 @@ jobs:
             --artifacts-dir=web-ext-artifacts \
             --channel=unlisted \
             --ignore-files=updates.json \
+            --amo-base-url=https://addons.mozilla.org/api/v5/
 
       - name: Rename artifact to versioned filename
         id: artifact
