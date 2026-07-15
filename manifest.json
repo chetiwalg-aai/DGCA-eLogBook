@@ -5,7 +5,7 @@
 	"description": "Scrape AAI MyLogBook or EGcAexport and auto-fill DGCA eLogBook entries",
 	"browser_specific_settings": {
 		"gecko": {
-			"id": "dgca-autofill@chetiwalg",
+			"id": "egca-autofill-selfhosted@chetiwalg",
 			"strict_min_version": "128.0",
 			"update_url": "https://raw.githubusercontent.com/chetiwalg-aai/DGCA-eLogBook/main/updates.json",
 			"data_collection_permissions": {
