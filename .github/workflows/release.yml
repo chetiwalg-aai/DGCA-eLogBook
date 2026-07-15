@@ -1,0 +1,89 @@
+name: Build, Sign & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install web-ext
+        run: npm install -g web-ext
+
+      - name: Extract version from manifest
+        id: ver
+        run: echo "version=$(node -p "require('./manifest.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Lint extension
+        run: web-ext lint --source-dir=. --ignore-files=updates.json
+
+      - name: Sign with Mozilla (unlisted / self-distribution)
+        env:
+          WEB_EXT_API_KEY: ${{ secrets.AMO_JWT_ISSUER }}
+          WEB_EXT_API_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: |
+          web-ext sign \
+            --source-dir=. \
+            --artifacts-dir=web-ext-artifacts \
+            --channel=unlisted \
+            --ignore-files=updates.json \
+            --amo-base-url=https://addons.mozilla.org/api/v5/
+
+      - name: Rename artifact
+        id: artifact
+        run: |
+          XPI=$(ls web-ext-artifacts/*.xpi | head -n1)
+          NAME="egca-autofill-${{ steps.ver.outputs.version }}.xpi"
+          cp "$XPI" "$NAME"
+          echo "path=$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Compute SHA256
+        id: hash
+        run: echo "hash=$(sha256sum '${{ steps.artifact.outputs.path }}' | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Generate updates.json
+        run: |
+          cat > updates.json <<EOF
+          {
+            "addons": {
+              "egca-autofill@chetiwalg": {
+                "updates": [
+                  {
+                    "version": "${{ steps.ver.outputs.version }}",
+                    "update_link": "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ steps.artifact.outputs.path }}",
+                    "update_hash": "sha256:${{ steps.hash.outputs.hash }}"
+                  }
+                ]
+              }
+            }
+          }
+          EOF
+
+      - name: Commit updates.json to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout main
+          git add updates.json
+          git commit -m "chore: update updates.json for ${{ github.ref_name }}" || echo "no changes"
+          git push origin main
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.artifact.outputs.path }}
+          generate_release_notes: true
