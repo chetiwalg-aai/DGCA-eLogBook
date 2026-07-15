@@ -20,6 +20,16 @@ DGCA-side filler content script reads from.
 	let _offset = 0;
 	let _selectedRows = {};
 
+	// Firefox's sidebarAction.open() requires a direct, synchronous call from
+	// a genuine user-gesture event handler — unlike Chrome's sidePanel.open(),
+	// it does NOT honor gesture context relayed through runtime.sendMessage.
+	// So on Firefox, the background script's attempt to auto-open the sidebar
+	// from OPEN_SIDE_PANEL silently fails, and we need to tell the user to
+	// click the toolbar icon themselves instead.
+	function isFirefox() {
+		return typeof navigator !== 'undefined' && /Firefox\//.test(navigator.userAgent || '');
+	}
+
 	function getAaiUser() {
 		try {
 			let loginId = '';
@@ -235,9 +245,14 @@ DGCA-side filler content script reads from.
 		userWarn.id = 'dgca-user-warn';
 		userWarn.style.cssText = 'font-size:13px; color:#c0392b; font-weight:700; display:none;';
 
+		const toast = document.createElement('span');
+		toast.id = 'dgca-toast-msg';
+		toast.style.cssText = 'font-size:13px; color:#0d6efd; font-weight:700; display:none;';
+
 		wrapper.appendChild(sendBtn);
 		wrapper.appendChild(badge);
 		wrapper.appendChild(userWarn);
+		wrapper.appendChild(toast);
 
 		if (downloadBtn) {
 			downloadBtn.parentNode.insertBefore(wrapper, downloadBtn.nextSibling);
@@ -372,7 +387,14 @@ DGCA-side filler content script reads from.
 	}
 
 	function onSendClick() {
-		try { chrome.runtime.sendMessage({ type: 'OPEN_SIDE_PANEL' }); } catch (_) { }
+		// On Chrome, this can successfully auto-open the side panel because
+		// Chrome preserves user-gesture context across the runtime.sendMessage
+		// hop. Firefox does not, so sidebarAction.open() would just silently
+		// fail there — skip the attempt and rely on the toast nudge below
+		// instead of a call we know can't succeed.
+		if (!isFirefox()) {
+			try { chrome.runtime.sendMessage({ type: 'OPEN_SIDE_PANEL' }); } catch (_) { }
+		}
 
 		const newRows = Object.values(_selectedRows);
 		if (newRows.length === 0) {
@@ -425,6 +447,15 @@ DGCA-side filler content script reads from.
 						btn.textContent = `✓ ${toAdd.length} added (${merged.length} total)`;
 						btn.style.background = '#6c757d';
 						setTimeout(() => { btn.textContent = orig; btn.style.background = ''; }, 3000);
+					}
+
+					if (isFirefox()) {
+						const toast = document.getElementById('dgca-toast-msg');
+						if (toast) {
+							toast.textContent = '👉 Click the extension icon in your toolbar to open the panel';
+							toast.style.display = 'inline-block';
+							setTimeout(() => { toast.style.display = 'none'; }, 6000);
+						}
 					}
 
 					updateSelectionBadge();
