@@ -1,8 +1,8 @@
 {
 	"manifest_version": 3,
 	"name": "DGCA eLogBook Automator",
-	"version": "1.1.2",
-	"description": "Scrape AAI MyLogBook or EGcAexport and auto-fill DGCA eLogBook entries",
+	"version": "1.1.4",
+	"description": "Parse data from AAI EGCAexport and auto-fill DGCA eLogBook entries",
 	"browser_specific_settings": {
 		"gecko": {
 			"id": "egca-autofill-selfhosted@chetiwalg",
