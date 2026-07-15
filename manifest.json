@@ -3,14 +3,17 @@
 	"name": "DGCA eLogBook Automator",
 	"version": "1.1.0",
 	"description": "Scrape AAI MyLogBook or EGcAexport and auto-fill DGCA eLogBook entries",
-
 	"browser_specific_settings": {
 		"gecko": {
 			"id": "egca-autofill@chetiwalg",
-			"strict_min_version": "128.0"
+			"strict_min_version": "128.0",
+			"data_collection_permissions": {
+				"required": [
+					"none"
+				]
+			}
 		}
 	},
-
 	"permissions": [
 		"activeTab",
 		"scripting",
@@ -23,7 +26,9 @@
 		"https://www.dgca.gov.in/*"
 	],
 	"background": {
-		"scripts": ["service-worker.js"],
+		"scripts": [
+			"service-worker.js"
+		],
 		"service_worker": "service-worker.js"
 	},
 	"content_scripts": [
