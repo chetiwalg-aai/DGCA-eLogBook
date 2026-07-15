@@ -38,7 +38,7 @@ jobs:
           web-ext sign \
             --source-dir=. \
             --artifacts-dir=web-ext-artifacts \
-            --channel unlisted \
+            --channel=unlisted \
             --ignore-files=updates.json \
 
       - name: Rename artifact to versioned filename
