@@ -38,9 +38,8 @@ jobs:
           web-ext sign \
             --source-dir=. \
             --artifacts-dir=web-ext-artifacts \
-            --channel=unlisted \
+            --channel unlisted \
             --ignore-files=updates.json \
-            --amo-base-url=https://addons.mozilla.org/api/v5/
 
       - name: Rename artifact to versioned filename
         id: artifact
