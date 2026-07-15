@@ -59,10 +59,10 @@ jobs:
 
       - name: Generate updates.json
         run: |
-          cat > updates.json <<EOF
+          cat > updates.json <<EOF2
           {
             "addons": {
-              "egca-autofill@chetiwalg": {
+              "egca-autofill-selfhosted@chetiwalg": {
                 "updates": [
                   {
                     "version": "${{ steps.ver.outputs.version }}",
@@ -73,7 +73,7 @@ jobs:
               }
             }
           }
-          EOF
+          EOF2
 
       - name: Commit updates.json to main
         run: |
