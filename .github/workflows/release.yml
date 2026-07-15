@@ -42,7 +42,7 @@ jobs:
             --ignore-files=updates.json \
             --amo-base-url=https://addons.mozilla.org/api/v5/
 
-      - name: Rename artifact
+      - name: Rename artifact to versioned filename
         id: artifact
         run: |
           XPI=$(ls web-ext-artifacts/*.xpi | head -n1)
@@ -50,7 +50,10 @@ jobs:
           cp "$XPI" "$NAME"
           echo "path=$NAME" >> "$GITHUB_OUTPUT"
 
-      - name: Compute SHA256
+      - name: Copy stable-named alias
+        run: cp "${{ steps.artifact.outputs.path }}" egca-autofill-latest.xpi
+
+      - name: Compute SHA256 (versioned file — used in updates.json)
         id: hash
         run: echo "hash=$(sha256sum '${{ steps.artifact.outputs.path }}' | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
@@ -79,11 +82,13 @@ jobs:
           git fetch origin main
           git checkout main
           git add updates.json
-          git commit -m "chore: update updates.json for ${{ github.ref_name }}" || echo "no changes"
+          git commit -m "chore: update updates.json for ${{ github.ref_name }}" || echo "no changes to commit"
           git push origin main
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.artifact.outputs.path }}
+          files: |
+            ${{ steps.artifact.outputs.path }}
+            egca-autofill-latest.xpi
           generate_release_notes: true
