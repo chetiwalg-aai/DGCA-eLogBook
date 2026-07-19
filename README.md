@@ -9,7 +9,7 @@ This extension works on both **Firefox** and **Chrome** (Manifest V3), but distr
 
 **Requirements:** Firefox 128 or later (Desktop)
 
-[![Install Latest Release](https://img.shields.io/github/v/release/chetiwalg-aai/DGCA-eLogBook?label=Install%20Extension&style=for-the-badge&logo=firefox-browser)](https://github.com/chetiwalg-aai/DGCA-eLogBook/releases/latest/download/egca-autofill-latest.xpi)
+[![Install Latest Release](https://img.shields.io/github/v/release/chetiwalg-aai/DGCA-eLogBook?label=Install%20Extension&style=for-the-badge&logo=firefox-browser)](https://addons.mozilla.org/en-US/firefox/addon/dgca-elogbook-automator/)
 
 1. Click the badge above (or grab the `.xpi` from [Releases](https://github.com/chetiwalg-aai/DGCA-eLogBook/releases/latest)) in **Firefox**.
 2. Firefox will prompt to install — click **Add**.
