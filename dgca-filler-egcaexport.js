@@ -53,7 +53,7 @@ values captured from the EGCA export table — no static value maps needed.
 
 		// ── ATS Unit (by text) ───────────────────────────────────────────────
 		await waitForSelectOptions(SEL.atsUnitId);
-		await selectByText(SEL.atsUnitId, raw.atsUnit);
+		await selectByText(SEL.atsUnitId, raw.atsUnit.replace(/-/g, ''));
 
 		// ── Type of Duty (by text) ───────────────────────────────────────────
 		await selectByText(SEL.typeOfDutyId, raw.typeOfDuty);
