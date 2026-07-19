@@ -395,6 +395,7 @@ btnStart.addEventListener('click', () => {
 		.set({ dgca_pending_rows: state.rows, dgca_row_status: state.statuses, dgca_row_errors: {} })
 		.catch(() => { });
 
+	progressSection.style.display = 'block';
 	progressText.textContent = 'Starting…';
 	progressStats.textContent = '';
 	progressFill.style.width = '0%';
