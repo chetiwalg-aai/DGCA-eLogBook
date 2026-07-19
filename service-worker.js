@@ -108,12 +108,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 					return;
 				}
 
-				chrome.tabs.sendMessage(dgcaTab.id, { type: 'START_FILLING', rows }, (resp) => {
-					if (chrome.runtime.lastError) {
-						sendResponse({ ok: false, error: 'Could not reach DGCA tab. Make sure you are on the entry page.' });
-					} else {
-						sendResponse(resp);
+				chrome.tabs.sendMessage(dgcaTab.id, { type: 'PING' }, (pingResp) => {
+					if (chrome.runtime.lastError || !pingResp?.breadcrumbOk) {
+						sendResponse({ ok: false, error: 'DGCA tab is not on the e-Log Book page (breadcrumb check failed). Please navigate there and try again.' });
+						return;
 					}
+
+					chrome.tabs.sendMessage(dgcaTab.id, { type: 'START_FILLING', rows }, (resp) => {
+						if (chrome.runtime.lastError) {
+							sendResponse({ ok: false, error: 'Could not reach DGCA tab. Make sure you are on the entry page.' });
+						} else {
+							sendResponse(resp);
+						}
+					});
 				});
 			})
 			.catch((err) => {
@@ -149,7 +156,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 				if (chrome.runtime.lastError) {
 					sendResponse({ ok: false, error: 'DGCA content script not responding.' });
 				} else {
-					sendResponse({ ok: true, url: resp?.url, onEntryPage: !!resp?.onEntryPage });
+					sendResponse({ ok: true, url: resp?.url, onEntryPage: !!resp?.onEntryPage, breadcrumbOk: !!resp?.breadcrumbOk });
 				}
 			});
 		});

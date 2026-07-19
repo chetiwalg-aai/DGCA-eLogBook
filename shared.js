@@ -22,7 +22,32 @@ shared.js
 		return new Promise(resolve => setTimeout(resolve, ms));
 	}
 
+	// Honorifics commonly prefixed/suffixed to names on the DGCA portal or in
+	// the EGCA export, which shouldn't cause a false "mismatch" against the
+	// bare name we intend to type.
+	const HONORIFICS = [
+		'mr', 'mrs', 'ms', 'miss', 'dr', 'prof', 'capt', 'captain',
+		'shri', 'smt', 'sri', 'kumari', 'er', 'eng'
+	];
+
+	function normalizeName(name) {
+		return String(name || '')
+			.toLowerCase()
+			.replace(/[.,]/g, ' ')
+			.split(/\s+/)
+			.filter(Boolean)
+			.filter(word => !HONORIFICS.includes(word))
+			.sort()
+			.join(' ');
+	}
+
+	// Loose equality check: same set of (non-honorific) words, regardless of
+	// order, case, spacing, or punctuation.
+	function namesMatch(a, b) {
+		return normalizeName(a) === normalizeName(b);
+	}
+
 	window.DGCA = {
-		parseDateDMY, formatDDMMYYYY, addOneDay, sleep,
+		parseDateDMY, formatDDMMYYYY, addOneDay, sleep, normalizeName, namesMatch,
 	};
 })();

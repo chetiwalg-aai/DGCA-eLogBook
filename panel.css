@@ -183,6 +183,53 @@ header {
 	cursor: not-allowed;
 }
 
+/* ── WSO/ATS radio options ────────────────────────────────────────────────── */
+.wso-toggle--radio {
+	gap: 16px;
+}
+
+.wso-radio-option {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex: initial;
+	cursor: pointer;
+}
+
+.wso-radio-option input[type="radio"] {
+	width: 14px;
+	height: 14px;
+	cursor: pointer;
+	accent-color: #4fc3f7;
+	flex: none;
+}
+
+.wso-radio-option--custom {
+	flex: 1;
+	min-width: 0;
+}
+
+#wso-custom-text {
+	flex: 1;
+	min-width: 0;
+	background: #0f0f1a;
+	border: 1px solid #2a2a3e;
+	border-radius: 4px;
+	color: #e0e0e0;
+	font-size: 12px;
+	padding: 4px 8px;
+}
+
+#wso-custom-text:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+#wso-custom-text:focus {
+	outline: none;
+	border-color: #4fc3f7;
+}
+
 /* ── DGCA tab status ──────────────────────────────────────────────────────── */
 .tab-status-row {
 	display: flex;

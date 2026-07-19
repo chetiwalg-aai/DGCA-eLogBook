@@ -31,11 +31,18 @@
 				<span id="queue-count" class="queue-count">0 rows queued</span>
 			</div>
 			<div id="queue-user-info" class="queue-user-info" style="display: none;"></div>
-			<div class="wso-toggle">
-				<input type="checkbox" id="wso-ats-toggle">
-				<label id="wso-ats-label" for="wso-ats-toggle">
-					Use <strong>ATS</strong> as EGCA-Id
+			<div id="wso-toggle-row" class="wso-toggle wso-toggle--radio">
+				<label class="wso-radio-option">
+					<input type="radio" name="wso-ats-mode" id="wso-ats-mode-ats" value="ats">
+					<span><strong>ATS</strong></span>
 				</label>
+				<label class="wso-radio-option wso-radio-option--custom">
+					<input type="radio" name="wso-ats-mode" id="wso-ats-mode-custom" value="custom" checked>
+					<input type="text" id="wso-custom-text" value="WSO">
+				</label>
+			</div>
+			<div id="ats-id-info" class="wso-toggle" style="display: none;">
+				<label>EGCA-Id: <strong id="ats-id-value"></strong></label>
 			</div>
 			<div class="tab-status-row">
 				<span id="dgca-tab-status" class="tab-status tab-status--unknown">DGCA tab: checking…</span>

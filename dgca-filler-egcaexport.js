@@ -7,26 +7,14 @@ values captured from the EGCA export table — no static value maps needed.
 */
 (function () {
 	'use strict';
-	const { parseDateDMY, formatDDMMYYYY, sleep, addOneDay } = window.DGCA;
+	const { parseDateDMY, formatDDMMYYYY, sleep, addOneDay, namesMatch } = window.DGCA;
 	const {
 		SEL, waitForSelector, waitForSelectOptions, waitForVisible,
 		waitForFieldValue, selectByText, selectByValue, setDatePickerValue, typeIntoField,
 		ensureCheckbox, resetFields, clickAddAndVerify, sendProgress
 	} = window.DGCA_FILLER;
 
-	async function selectWsoOrAts(selector, useAts) {
-		const el = await waitForSelector(selector);
-		const searchStr = useAts ? 'ats' : 'wso';
-		const match = Array.from(el.options).find(o =>
-			o.value.toLowerCase().includes(searchStr) ||
-			o.text.toLowerCase().includes(searchStr)
-		);
-		if (match) {
-			await selectByValue(selector, match.value);
-		}
-	}
-
-	async function fillRow(row, useAts = false) {
+	async function fillRow(row, wsoAtsText = 'WSO') {
 		// console.log('[DGCA Filler] Processing row:', row);
 
 		const { timeFrom, timeTo } = row;
@@ -57,7 +45,7 @@ values captured from the EGCA export table — no static value maps needed.
 		if (raw.atsEgcaId) {
 			await selectByText(SEL.wsoEgcaId, raw.atsEgcaId);
 		} else {
-			await selectWsoOrAts(SEL.wsoEgcaId, useAts);
+			await selectByText(SEL.wsoEgcaId, wsoAtsText);
 		}
 
 		// ── Rating (by text) ─────────────────────────────────────────────────
@@ -91,7 +79,10 @@ values captured from the EGCA export table — no static value maps needed.
 				await waitForVisible(SEL.traineeLicNumDiv);
 				await selectByText(SEL.ojtEnv, raw.ojtEnv);
 				await typeIntoField(SEL.traineeAtcol, raw.traineeLicense);
-				await waitForFieldValue('#nameOfInstructor');
+				const instructorField = await waitForFieldValue('#nameOfInstructor');
+				if (raw.ojtiName && !namesMatch(instructorField.value, raw.ojtiName)) {
+					await typeIntoField('#nameOfInstructor', raw.ojtiName.toUpperCase());
+				}
 			}
 
 		} else if (raw.typeOfDuty === 'OJT (On Job Training)') {
@@ -115,7 +106,10 @@ values captured from the EGCA export table — no static value maps needed.
 				await waitForVisible(SEL.ojtFieldsDiv);
 				await selectByText(SEL.ojtEnv, raw.ojtEnv);
 				await typeIntoField(SEL.traineeAtcol, raw.traineeLicense);
-				await waitForFieldValue('#nameOfInstructor');
+				const instructorField = await waitForFieldValue('#nameOfInstructor');
+				if (raw.ojtiName && !namesMatch(instructorField.value, raw.ojtiName)) {
+					await typeIntoField('#nameOfInstructor', raw.ojtiName.toUpperCase());
+				}
 			}
 
 		} else if (raw.typeOfDuty === 'Classroom training/Classroom theory functions') {
@@ -154,8 +148,10 @@ values captured from the EGCA export table — no static value maps needed.
 
 		const statuses = rows.map(() => 'pending');
 		const errors = {};
-		const _atsData = await window.DGCA_STORAGE.get(['dgca_use_ats']).catch(() => ({}));
-		const useAts = !!(_atsData?.dgca_use_ats);
+		const _wsoAtsData = await window.DGCA_STORAGE.get(['dgca_wso_ats_mode', 'dgca_wso_custom_text']).catch(() => ({}));
+		const wsoAtsText = (_wsoAtsData?.dgca_wso_ats_mode === 'ats')
+			? 'ATS'
+			: (_wsoAtsData?.dgca_wso_custom_text || 'WSO');
 
 		await window.DGCA_STORAGE.set({ dgca_row_status: statuses });
 
@@ -172,7 +168,7 @@ values captured from the EGCA export table — no static value maps needed.
 			if (_aborted) break;
 
 			try {
-				await fillRow(row, useAts);
+				await fillRow(row, wsoAtsText);
 				if (_aborted) break;
 
 				const result = await clickAddAndVerify();
@@ -210,10 +206,14 @@ values captured from the EGCA export table — no static value maps needed.
 			_sessionRunning = false;
 			sendResponse({ ok: true });
 		} else if (msg.type === 'PING') {
+			const breadcrumbEl = document.querySelector('#breadcrumb');
+			const breadcrumbOk = !!breadcrumbEl &&
+				breadcrumbEl.textContent.includes('Air Traffic Controllers e-Log Book');
 			sendResponse({
 				ok: true,
 				url: window.location.href,
 				onEntryPage: !!document.querySelector(SEL.briefingCheckbox),
+				breadcrumbOk,
 			});
 		}
 	});

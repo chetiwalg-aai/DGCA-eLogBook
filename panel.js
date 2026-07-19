@@ -48,7 +48,7 @@ function sortQueue(rows, statuses, errors) {
 
 const state = {
 	rows: [], statuses: [], errors: {},
-	sessionRunning: false, dgcaTabReady: false, useAts: false, queueUser: null,
+	sessionRunning: false, dgcaTabReady: false, useAts: false, wsoCustomText: 'WSO', queueUser: null,
 };
 
 const $ = id => document.getElementById(id);
@@ -56,8 +56,12 @@ const progressErrorPill = $('progress-error-pill');
 const badge = $('badge');
 const queueSection = $('queue-section');
 const queueCount = $('queue-count');
-const wsoAtsToggle = $('wso-ats-toggle');
-const wsoAtsLabel = $('wso-ats-label');
+const wsoAtsModeAts = $('wso-ats-mode-ats');
+const wsoAtsModeCustom = $('wso-ats-mode-custom');
+const wsoCustomText = $('wso-custom-text');
+const wsoToggleRow = $('wso-toggle-row');
+const atsIdInfo = $('ats-id-info');
+const atsIdValue = $('ats-id-value');
 const dgcaTabStatus = $('dgca-tab-status');
 const progressSection = $('progress-section');
 const progressText = $('progress-text');
@@ -108,14 +112,35 @@ function hideTopError() {
 function getPillClass(status) { return PILL_CLASS[status] || PILL_CLASS[ROW_STATUS.PENDING]; }
 function getPillLabel(status) { return PILL_LABEL[status] || PILL_LABEL[ROW_STATUS.PENDING]; }
 
+// ── ATS EGCA-Id override display ─────────────────────────────────────────────
+// If the imported rows carry a non-blank atsEgcaId (present on all rows if
+// present on any, since it comes from the source table's per-user column),
+// the "Use ATS as EGCA-Id" toggle is moot — the portal will match by exact
+// text anyway — so show the resolved id instead of the toggle.
+function updateAtsIdDisplay(rows) {
+	const firstAtsId = rows.length > 0 ? (rows[0].egcaRaw || {}).atsEgcaId : '';
+	if (firstAtsId) {
+		wsoToggleRow.style.display = 'none';
+		atsIdValue.textContent = firstAtsId;
+		atsIdInfo.style.display = 'flex';
+	} else {
+		wsoToggleRow.style.display = 'flex';
+		atsIdInfo.style.display = 'none';
+	}
+}
+
 
 // ── Storage load ─────────────────────────────────────────────────────────────
 function loadFromStorage() {
 	chrome.storage.session
-		.get(['dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors', 'dgca_session_ts', 'dgca_use_ats', 'dgca_queue_user'])
+		.get(['dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors', 'dgca_session_ts', 'dgca_wso_ats_mode', 'dgca_wso_custom_text', 'dgca_queue_user'])
 		.then((data) => {
-			state.useAts = !!(data?.dgca_use_ats);
-			wsoAtsToggle.checked = state.useAts;
+			state.useAts = (data?.dgca_wso_ats_mode || 'custom') === 'ats';
+			state.wsoCustomText = data?.dgca_wso_custom_text || 'WSO';
+			wsoAtsModeAts.checked = state.useAts;
+			wsoAtsModeCustom.checked = !state.useAts;
+			wsoCustomText.value = state.wsoCustomText;
+			wsoCustomText.disabled = state.useAts;
 			state.queueUser = data?.dgca_queue_user || null;
 
 			const rows = data?.dgca_pending_rows || [];
@@ -138,6 +163,7 @@ function loadFromStorage() {
 				btnStart.disabled = true;
 				setBadge('Idle', 'idle');
 				renderQueueUser(null);
+				updateAtsIdDisplay([]);
 			}
 		}).catch(() => { });
 }
@@ -163,6 +189,7 @@ function renderQueueSection(rows) {
 	queueCount.textContent = `${rows.length} row${rows.length === 1 ? '' : 's'} queued`;
 	btnStart.disabled = false;
 	setBadge('Ready', 'done');
+	updateAtsIdDisplay(rows);
 }
 
 // ── Row list ──────────────────────────────────────────────────────────────────
@@ -188,9 +215,8 @@ function renderRowList(rows, statuses, errors) {
 
 		// Instructor chip — from instructorLicense / ojtiName
 		let instrHtml = '';
-		const instrName = raw.ojtiName || raw.instructorName || '';
-		if (instrName) {
-			instrHtml = `<span class="row-item__instr" title="Instructor">👤 ${escHtml(instrName)}</span>`;
+		if (raw.instructorLicense) {
+			instrHtml = `<span class="row-item__instr" title="Instructor">👤 ${escHtml(raw.instructorName || raw.ojtiName)}</span>`;
 		}
 
 		// Trainee chip — from traineeLicense / ojtiName
@@ -305,6 +331,10 @@ function checkDgcaTab() {
 			dgcaTabStatus.textContent = '✗ DGCA tab not ready — open & navigate to entry page';
 			dgcaTabStatus.className = 'tab-status tab-status--error';
 			state.dgcaTabReady = false;
+		} else if (!resp.breadcrumbOk) {
+			dgcaTabStatus.textContent = '⚠ DGCA tab found — not on e-Log Book page (breadcrumb mismatch)';
+			dgcaTabStatus.className = 'tab-status tab-status--error';
+			state.dgcaTabReady = false;
 		} else if (!resp.onEntryPage) {
 			dgcaTabStatus.textContent = '⚠ DGCA tab found — navigate to the logbook entry page';
 			dgcaTabStatus.className = 'tab-status tab-status--error';
@@ -318,10 +348,35 @@ function checkDgcaTab() {
 }
 btnCheckDgca.addEventListener('click', checkDgcaTab);
 
-// ── WSO/ATS toggle ────────────────────────────────────────────────────────────
-wsoAtsToggle.addEventListener('change', () => {
-	state.useAts = wsoAtsToggle.checked;
-	chrome.storage.session.set({ dgca_use_ats: state.useAts }).catch(() => { });
+function setWsoAtsControlsDisabled(disabled) {
+	wsoAtsModeAts.disabled = disabled;
+	wsoAtsModeCustom.disabled = disabled;
+	wsoCustomText.disabled = disabled || state.useAts;
+}
+
+// ── WSO/ATS mode ──────────────────────────────────────────────────────────────
+function persistWsoAtsMode() {
+	chrome.storage.session.set({
+		dgca_wso_ats_mode: state.useAts ? 'ats' : 'custom',
+		dgca_wso_custom_text: state.wsoCustomText,
+	}).catch(() => { });
+}
+
+[wsoAtsModeAts, wsoAtsModeCustom].forEach(radio => {
+	radio.addEventListener('change', () => {
+		state.useAts = wsoAtsModeAts.checked;
+		wsoCustomText.disabled = state.useAts;
+		persistWsoAtsMode();
+	});
+});
+
+wsoCustomText.addEventListener('input', () => {
+	state.wsoCustomText = wsoCustomText.value;
+	persistWsoAtsMode();
+});
+
+wsoCustomText.addEventListener('focus', () => {
+	if (!wsoAtsModeCustom.checked) wsoAtsModeCustom.click();
 });
 
 // ── Start filling ─────────────────────────────────────────────────────────────
@@ -340,13 +395,12 @@ btnStart.addEventListener('click', () => {
 		.set({ dgca_pending_rows: state.rows, dgca_row_status: state.statuses, dgca_row_errors: {} })
 		.catch(() => { });
 
-	progressSection.style.display = 'block';
 	progressText.textContent = 'Starting…';
 	progressStats.textContent = '';
 	progressFill.style.width = '0%';
 	btnStart.disabled = true;
 	btnAbort.style.display = 'inline-block';
-	wsoAtsToggle.disabled = true;
+	setWsoAtsControlsDisabled(true);
 	setBadge('Running', 'running');
 	renderRowList(state.rows, state.statuses, state.errors);
 
@@ -357,13 +411,12 @@ btnStart.addEventListener('click', () => {
 
 			setBadge('Error', 'error');
 			btnStart.disabled = false;
-			btnAbort.style.display = 'none';
+			setWsoAtsControlsDisabled(false);
 
 			// KEEP PROGRESS SECTION VISIBLE TO SHOW THE ERROR PILL
 			progressSection.style.display = 'block';
 			progressText.textContent = 'Start failed';
 
-			wsoAtsToggle.disabled = false;
 			state.sessionRunning = false;
 
 			// SHOW THE ERROR IN THE NEW PILL
@@ -380,7 +433,7 @@ btnAbort.addEventListener('click', () => {
 	setBadge('Idle', 'idle');
 	btnAbort.style.display = 'none';
 	btnStart.disabled = false;
-	wsoAtsToggle.disabled = false;
+	setWsoAtsControlsDisabled(false);
 	progressSection.style.display = 'none';
 });
 
@@ -437,7 +490,7 @@ chrome.runtime.onMessage.addListener((msg) => {
 		const { index, total, status, error } = msg;
 		if (status === 'session-complete') {
 			state.sessionRunning = false;
-			wsoAtsToggle.disabled = false;
+			setWsoAtsControlsDisabled(false);
 			setBadge('Done', 'done');
 			btnAbort.style.display = 'none';
 			btnStart.disabled = false;
@@ -449,7 +502,7 @@ chrome.runtime.onMessage.addListener((msg) => {
 			setBadge('Error', 'error');
 			btnAbort.style.display = 'none';
 			btnStart.disabled = false;
-			wsoAtsToggle.disabled = false;
+			setWsoAtsControlsDisabled(false);
 			progressText.textContent = 'Session failed';
 
 			// SHOW THE ERROR IN THE NEW PILL
