@@ -1,3 +1,7 @@
+## Video Guide
+
+https://youtu.be/qVMiYGiWJ-E
+
 ## Browser Support
 
 This extension works on both **Firefox** and **Chrome** (Manifest V3), but distribution differs between the two:
