@@ -213,16 +213,16 @@ function renderRowList(rows, statuses, errors) {
 		const dutyShort = raw.typeOfDuty ? raw.typeOfDuty.split('(')[0].trim() : '';
 		const dutyHtml = `<span class="row-item__duty" title="${escHtml(raw.typeOfDuty || '')}">${escHtml(dutyShort)}</span>`;
 
-		// Instructor chip — from instructorLicense / ojtiName
+		// Instructor chip — from instructorLicense / instructorName
 		let instrHtml = '';
 		if (raw.instructorLicense) {
-			instrHtml = `<span class="row-item__instr" title="Instructor">👤 ${escHtml(raw.instructorName || raw.ojtiName)}</span>`;
+			instrHtml = `<span class="row-item__instr" title="Instructor">👤 ${escHtml(raw.instructorName)}</span>`;
 		}
 
-		// Trainee chip — from traineeLicense / ojtiName
+		// Trainee chip — from traineeLicense / traineeName
 		let traineeHtml = '';
 		if (raw.traineeLicense) {
-			const label = raw.ojtiName ? `${raw.ojtiName} (${raw.traineeLicense})` : raw.traineeLicense;
+			const label = raw.traineeName ? `${raw.traineeName} (${raw.traineeLicense})` : raw.traineeLicense;
 			traineeHtml = `<span class="row-item__trainee" title="Trainee">🎓 ${escHtml(label)}</span>`;
 		}
 

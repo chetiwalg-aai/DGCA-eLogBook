@@ -66,22 +66,22 @@ values captured from the EGCA export table — no static value maps needed.
 				await typeIntoField(SEL.examinerAtcol, raw.instructorLicense);
 				await waitForFieldValue('#ojtTrainerName');
 			}
-			if (raw.newlyEstabStation === 'Y') {
+			if (raw.newlyEstabStation) {
 				await ensureCheckbox('#isAtsUnitChecked', true);
 			}
 
 		} else if (raw.typeOfDuty === 'Instruction') {
 			if (raw.knowledgeCheck === 'Y') {
 				await ensureCheckbox(SEL.isTheoryClasses, true);
-				await typeIntoField(SEL.remarksField, `${raw.ojtiName} (${raw.traineeLicense})`);
+				await typeIntoField(SEL.remarksField, `${raw.traineeName} (${raw.traineeLicense})`);
 			} else if (raw.ojtProvidedCheck === 'Y') {
 				await ensureCheckbox(SEL.isOjtProvided, true);
 				await waitForVisible(SEL.traineeLicNumDiv);
 				await selectByText(SEL.ojtEnv, raw.ojtEnv);
 				await typeIntoField(SEL.traineeAtcol, raw.traineeLicense);
 				const instructorField = await waitForFieldValue('#nameOfInstructor');
-				if (raw.ojtiName && !namesMatch(instructorField.value, raw.ojtiName)) {
-					await typeIntoField('#nameOfInstructor', raw.ojtiName.toUpperCase());
+				if (raw.traineeName && !namesMatch(instructorField.value, raw.traineeName)) {
+					await typeIntoField('#nameOfInstructor', raw.traineeName.toUpperCase());
 				}
 			}
 
@@ -94,7 +94,7 @@ values captured from the EGCA export table — no static value maps needed.
 		} else if (raw.typeOfDuty === 'Examiner Functions') {
 			if (raw.knowledgeCheck === 'Y') {
 				await ensureCheckbox(SEL.isTheoryClasses, true);
-				await typeIntoField('#nameOfInstructor', raw.ojtiName);
+				await typeIntoField('#nameOfInstructor', raw.instructorName);
 			} else if (raw.proficiencyCheck === 'Y') {
 				await ensureCheckbox('#isProficiencyChecked', true);
 				await waitForVisible(SEL.ojtFieldsDiv);
@@ -107,8 +107,8 @@ values captured from the EGCA export table — no static value maps needed.
 				await selectByText(SEL.ojtEnv, raw.ojtEnv);
 				await typeIntoField(SEL.traineeAtcol, raw.traineeLicense);
 				const instructorField = await waitForFieldValue('#nameOfInstructor');
-				if (raw.ojtiName && !namesMatch(instructorField.value, raw.ojtiName)) {
-					await typeIntoField('#nameOfInstructor', raw.ojtiName.toUpperCase());
+				if (raw.traineeName && !namesMatch(instructorField.value, raw.traineeName)) {
+					await typeIntoField('#nameOfInstructor', raw.traineeName.toUpperCase());
 				}
 			}
 
@@ -126,7 +126,7 @@ values captured from the EGCA export table — no static value maps needed.
 		} else if (raw.typeOfDuty === 'Familiarization of ATS Unit') {
 			await waitForVisible(SEL.ojtFieldsDiv);
 			await selectByText(SEL.ojtEnv, raw.ojtEnv);
-			await typeIntoField('#newlyEstablisAtstsation', raw.postingStation);
+			await typeIntoField('#newlyEstablisAtstsation', raw.newlyEstabStation);
 
 		} else if (raw.typeOfDuty === 'ART(Annual Refresher Training)') {
 			// ART logic — no extra fields required today.

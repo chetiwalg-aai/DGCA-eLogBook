@@ -13,8 +13,10 @@ DGCA-side filler content script reads from.
 		ATS_EGCA_ID: 4, RATING: 5, ATS_UNIT: 6, BRIEFING_DONE: 7,
 		TYPE_OF_DUTY: 8, START_TIME: 9, END_TIME: 10, TOTAL_DURATION: 11,
 		REMARKS: 12, KNOWLEDGE_CHECK: 13, SKILL_TEST_CHECK: 14, OJT_PROVIDED_CHECK: 15,
-		OJT_ENV: 16, OJTI_NAME: 17, TRAINEE_LICENSE: 18, INSTRUCTOR_NAME: 19,
-		INSTRUCTOR_LICENSE: 20, PROFICIENCY_CHECK: 21, NEWLY_ESTAB_STATION: 22
+		// OJTI_NAME was dropped from the source table; TRAINEE_NAME was added,
+		// and INSTRUCTOR_LICENSE/INSTRUCTOR_NAME swapped positions.
+		OJT_ENV: 16, TRAINEE_LICENSE: 17, TRAINEE_NAME: 18, INSTRUCTOR_LICENSE: 19,
+		INSTRUCTOR_NAME: 20, PROFICIENCY_CHECK: 21, NEWLY_ESTAB_STATION: 22
 	};
 
 	let _offset = 0;
@@ -109,7 +111,7 @@ DGCA-side filler content script reads from.
 		const rawSkillTestCheck = getText(EGCA_COL.SKILL_TEST_CHECK);
 		const rawOjtProvidedCheck = getText(EGCA_COL.OJT_PROVIDED_CHECK);
 		const rawOjtEnv = getText(EGCA_COL.OJT_ENV);
-		const rawOjtiName = getText(EGCA_COL.OJTI_NAME);
+		const rawTraineeName = getText(EGCA_COL.TRAINEE_NAME);
 		const rawTraineeLicense = getText(EGCA_COL.TRAINEE_LICENSE);
 		const rawInstructorName = getText(EGCA_COL.INSTRUCTOR_NAME);
 		const rawInstructorLicense = getText(EGCA_COL.INSTRUCTOR_LICENSE);
@@ -136,7 +138,7 @@ DGCA-side filler content script reads from.
 			remarks: rawRemarks,
 			postingStationName: rawPostingStation,
 			ratingText: rawRating,
-			nameOjti: rawOjtiName,
+			nameTrainee: rawTraineeName,
 			instructorAtcol: rawInstructorLicense,
 
 			// ── egcaRaw: full raw data used by dgca-filler.js ────────────────────
@@ -157,7 +159,7 @@ DGCA-side filler content script reads from.
 				skillTestCheck: rawSkillTestCheck,
 				ojtProvidedCheck: rawOjtProvidedCheck,
 				ojtEnv: rawOjtEnv,
-				ojtiName: rawOjtiName,
+				traineeName: rawTraineeName,
 				traineeLicense: rawTraineeLicense,
 				instructorName: rawInstructorName,
 				instructorLicense: rawInstructorLicense,
