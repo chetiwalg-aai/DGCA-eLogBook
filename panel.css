@@ -51,7 +51,7 @@ header {
 
 .badge--idle {
 	background: #2a2a3e;
-	color: #888;
+	color: #aab0c0;
 }
 
 .badge--waiting {
@@ -86,7 +86,7 @@ header {
 .hint {
 	font-size: 12px;
 	line-height: 1.7;
-	color: #999;
+	color: #b5b5c5;
 }
 
 .hint strong {
@@ -131,7 +131,7 @@ header {
 /* ── Queue user tag ───────────────────────────────────────────────────────── */
 .queue-user-info {
 	font-size: 11px;
-	color: #999;
+	color: #b5b5c5;
 	padding: 0 0 8px;
 	margin-bottom: 8px;
 	border-bottom: 1px solid #2a2a3e;
@@ -146,7 +146,7 @@ header {
 }
 
 .queue-user-info .queue-user-login {
-	color: #666;
+	color: #8a8a9e;
 }
 
 /* ── WSO toggle ───────────────────────────────────────────────────────────── */
@@ -249,7 +249,7 @@ header {
 }
 
 .tab-status--unknown {
-	color: #888;
+	color: #aab0c0;
 }
 
 .tab-status--checking {
@@ -365,7 +365,7 @@ header {
 	font-weight: 700;
 	text-transform: uppercase;
 	letter-spacing: 0.5px;
-	color: #666;
+	color: #8a8a9e;
 	padding: 10px 12px 4px;
 }
 
@@ -401,7 +401,7 @@ header {
 
 .row-item__num {
 	font-size: 11px;
-	color: #555;
+	color: #8a8a9e;
 	min-width: 18px;
 }
 
@@ -413,7 +413,7 @@ header {
 
 .row-item__time {
 	font-size: 11px;
-	color: #666;
+	color: #aab0c0;
 	min-width: 90px;
 	font-family: 'SF Mono', 'Consolas', monospace;
 }
@@ -429,7 +429,7 @@ header {
 
 .row-item__duty {
 	font-size: 11px;
-	color: #888;
+	color: #b0b4c0;
 }
 
 .row-item__instr {
@@ -476,7 +476,7 @@ header {
 
 .pill--pending {
 	background: #2a2a3e;
-	color: #666;
+	color: #9a9ab0;
 }
 
 .pill--filling {
@@ -500,8 +500,8 @@ header {
 }
 
 .pill--skipped {
-	background: #252525;
-	color: #666;
+	background: #2e2e3e;
+	color: #9a9ab0;
 }
 
 /* ── Error modal ──────────────────────────────────────────────────────────── */
@@ -556,7 +556,7 @@ header {
 .footer-credit {
 	text-align: center;
 	font-size: 11px;
-	color: #555;
+	color: #bdbdd7;
 	padding: 14px 12px 4px;
 }
 
