@@ -73,7 +73,9 @@ values captured from the EGCA export table — no static value maps needed.
 		} else if (raw.typeOfDuty === 'Instruction') {
 			if (raw.knowledgeCheck === 'Y') {
 				await ensureCheckbox(SEL.isTheoryClasses, true);
-				await typeIntoField(SEL.remarksField, `${raw.traineeName} (${raw.traineeLicense})`);
+				if (raw.traineeLicense) {
+					await typeIntoField(SEL.remarksField, `${raw.traineeName} (${raw.traineeLicense})`);
+				}
 			} else if (raw.ojtProvidedCheck === 'Y') {
 				await ensureCheckbox(SEL.isOjtProvided, true);
 				await waitForVisible(SEL.traineeLicNumDiv);

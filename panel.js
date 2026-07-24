@@ -207,7 +207,7 @@ function renderRowList(rows, statuses, errors) {
 
 		// ATS unit chip
 		const atsHtml = row.atsUnit
-			? `<span class="row-item__ats">${escHtml(row.atsUnit)}</span>` : '';
+			? `<span class="row-item__ats">${escHtml(`${raw.rating} - ${row.atsUnit}`)}</span>` : '';
 
 		// Duty label — use raw portal text directly; show as tooltip too for brevity
 		const dutyShort = raw.typeOfDuty ? raw.typeOfDuty.split('(')[0].trim() : '';
