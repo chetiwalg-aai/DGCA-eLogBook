@@ -3,9 +3,9 @@
     "egca-autofill-selfhosted@chetiwalg": {
       "updates": [
         {
-          "version": "2.0.1",
-          "update_link": "https://github.com/chetiwalg-aai/DGCA-eLogBook/releases/download/v2.0.1/egca-autofill-2.0.1.xpi",
-          "update_hash": "sha256:87de9ff119e7e94edfcdefccf5356f414c1d462e28e6bdc5e36ec978b2b21381"
+          "version": "2.0.2",
+          "update_link": "https://github.com/chetiwalg-aai/DGCA-eLogBook/releases/download/v2.0.2/egca-autofill-2.0.2.xpi",
+          "update_hash": "sha256:919255957c2619048e834afd55b72b7668bd31e66a2e943f6bb9f21a61adf020"
         }
       ]
     }
