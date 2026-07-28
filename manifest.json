@@ -1,7 +1,7 @@
 {
 	"manifest_version": 3,
 	"name": "DGCA eLogBook Automator",
-	"version": "2.0.4",
+	"version": "2.0.5",
 	"description": "Parse data from AAI EGCAexport and auto-fill DGCA eLogBook entries",
 	"browser_specific_settings": {
 		"gecko": {
@@ -24,7 +24,8 @@
 	],
 	"host_permissions": [
 		"https://iamatc.aai.aero/*",
-		"https://www.dgca.gov.in/*"
+		"https://www.dgca.gov.in/*",
+		"https://api.github.com/*"
 	],
 	"background": {
 		"scripts": [
