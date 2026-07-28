@@ -115,20 +115,23 @@ DGCA-side filler content script reads from.
 
 	async function refreshUserMismatchIndicator() {
 		try {
-			const warnEl = document.getElementById('dgca-user-warn');
-			if (!warnEl) return;
+			const warnEls = document.querySelectorAll('.dgca-user-warn');
+			if (warnEls.length === 0) return;
 
 			const data = await window.DGCA_STORAGE.get(['dgca_pending_rows', 'dgca_queue_user']);
 			const existing = data?.dgca_pending_rows || [];
 			const queueUser = data?.dgca_queue_user || null;
 			const current = getAaiUser();
 
-			if (isUserMismatch(current, queueUser, existing.length)) {
-				warnEl.textContent = `⚠ Queue is for ${queueUser.name} — clear it before adding as ${current.name}`;
-				warnEl.style.display = 'inline-block';
-			} else {
-				warnEl.style.display = 'none';
-			}
+			const mismatch = isUserMismatch(current, queueUser, existing.length);
+			warnEls.forEach(warnEl => {
+				if (mismatch) {
+					warnEl.textContent = `⚠ Queue is for ${queueUser.name} — clear it before adding as ${current.name}`;
+					warnEl.style.display = 'inline-block';
+				} else {
+					warnEl.style.display = 'none';
+				}
+			});
 		} catch (_) { }
 	}
 
@@ -290,10 +293,10 @@ DGCA-side filler content script reads from.
 		_headerInjected = true;
 	}
 
-	function findDownloadCsvButton() {
-		const bottomBtn = document.querySelector('button.btn.mb-2[onclick*="downloadEgcaCsv"]');
-		if (bottomBtn) return bottomBtn;
-
+	// Returns EVERY "Download eGCA CSV" button on the page (there can be more
+	// than one — e.g. one above the preview table and one below it), not just
+	// the last one, so a queue button can be injected alongside each of them.
+	function findDownloadCsvButtons() {
 		const candidates = Array.from(document.querySelectorAll('button, a.btn, a'));
 		const matches = candidates.filter(el => {
 			const text = el.textContent.trim().toLowerCase();
@@ -301,36 +304,46 @@ DGCA-side filler content script reads from.
 			return (text.includes('download') && text.includes('csv')) ||
 				onclick.includes('downloadEgcaCsv');
 		});
-		return matches.length > 0 ? matches[matches.length - 1] : null;
+		// De-dupe in case an element matches via both text and onclick checks
+		// or appears twice in the candidate list for some other reason.
+		return Array.from(new Set(matches));
 	}
+	
 
-	function ensureButtonInjected() {
-		if (_buttonInjected) return;
-		if (document.getElementById('dgca-send-btn')) { _buttonInjected = true; return; }
-
-		const downloadBtn = findDownloadCsvButton();
-
+	// Builds one queue-button instance (button + selection badge + warning +
+	// toast) and inserts it right after the given download button. `idSuffix`
+	// is '' for the first instance (keeps the original element IDs, since
+	// other code such as the success-state toggle in onSendClick still looks
+	// those up directly) and e.g. '-2', '-3' for subsequent instances so IDs
+	// stay unique across the page. All instances share the dgca-* classes so
+	// updateSelectionBadge/refreshUserMismatchIndicator/onSendClick can keep
+	// every copy in sync at once.
+	function injectButtonInstance(downloadBtn, idSuffix) {
 		const wrapper = document.createElement('div');
-		wrapper.id = 'dgca-inline-btn-wrapper';
+		wrapper.className = 'dgca-inline-btn-wrapper';
+		if (!idSuffix) wrapper.id = 'dgca-inline-btn-wrapper';
 		wrapper.style.cssText = 'display:inline-flex; align-items:center; gap:10px; margin-left:12px; vertical-align:middle;';
 
 		const sendBtn = document.createElement('button');
-		sendBtn.id = 'dgca-send-btn';
-		sendBtn.className = 'btn btn-success btn-sm';
+		sendBtn.className = 'btn btn-success btn-sm dgca-send-btn';
+		if (!idSuffix) sendBtn.id = 'dgca-send-btn';
 		sendBtn.style.cssText = 'font-weight:600; padding:8px 16px;';
 		sendBtn.textContent = '✈ Add to DGCA Queue ▶';
 
 		const badge = document.createElement('span');
-		badge.id = 'dgca-sel-count';
+		badge.className = 'dgca-sel-count';
+		if (!idSuffix) badge.id = 'dgca-sel-count';
 		badge.style.cssText = 'font-size:14px; color:#28a745; font-weight:600;';
 		badge.textContent = '0 selected';
 
 		const userWarn = document.createElement('span');
-		userWarn.id = 'dgca-user-warn';
+		userWarn.className = 'dgca-user-warn';
+		if (!idSuffix) userWarn.id = 'dgca-user-warn';
 		userWarn.style.cssText = 'font-size:13px; color:#c0392b; font-weight:700; display:none;';
 
 		const toast = document.createElement('span');
-		toast.id = 'dgca-toast-msg';
+		toast.className = 'dgca-toast-msg';
+		if (!idSuffix) toast.id = 'dgca-toast-msg';
 		toast.style.cssText = 'font-size:13px; color:#0d6efd; font-weight:700; display:none;';
 
 		wrapper.appendChild(sendBtn);
@@ -338,21 +351,36 @@ DGCA-side filler content script reads from.
 		wrapper.appendChild(userWarn);
 		wrapper.appendChild(toast);
 
-		if (downloadBtn) {
-			downloadBtn.parentNode.insertBefore(wrapper, downloadBtn.nextSibling);
+		downloadBtn.parentNode.insertBefore(wrapper, downloadBtn.nextSibling);
+		sendBtn.addEventListener('click', onSendClick);
+	}
+
+	function ensureButtonInjected() {
+		if (_buttonInjected) return;
+		if (document.querySelector('.dgca-inline-btn-wrapper')) { _buttonInjected = true; return; }
+
+		const downloadBtns = findDownloadCsvButtons();
+
+		if (downloadBtns.length > 0) {
+			downloadBtns.forEach((btn, i) => injectButtonInstance(btn, i === 0 ? '' : `-${i + 1}`));
 		} else {
-			console.warn('[DGCA Injector] Could not find Download CSV button; falling back to top injection.');
+			console.warn('[DGCA Injector] Could not find any Download CSV button; falling back to top injection.');
 			const btnContainer = document.querySelector('.col-md-12') || document.querySelector('form') || document.body;
 			const fallbackWrap = document.createElement('div');
 			fallbackWrap.style.cssText = 'margin:15px 0; display:flex; align-items:center; gap:10px;';
-			fallbackWrap.appendChild(wrapper);
 
 			const firstBtn = btnContainer.querySelector('button');
 			if (firstBtn) btnContainer.insertBefore(fallbackWrap, firstBtn);
 			else btnContainer.prepend(fallbackWrap);
+
+			// Reuse injectButtonInstance by inserting a zero-size anchor node
+			// right before fallbackWrap's position, then let it insert after.
+			const anchor = document.createElement('span');
+			fallbackWrap.appendChild(anchor);
+			injectButtonInstance(anchor, '');
+			anchor.remove();
 		}
 
-		sendBtn.addEventListener('click', onSendClick);
 		_buttonInjected = true;
 		refreshUserMismatchIndicator();
 
@@ -441,8 +469,8 @@ DGCA-side filler content script reads from.
 	}
 
 	function updateSelectionBadge() {
-		const badge = document.getElementById('dgca-sel-count');
-		if (badge) badge.textContent = `${Object.keys(_selectedRows).length} selected`;
+		const text = `${Object.keys(_selectedRows).length} selected`;
+		document.querySelectorAll('.dgca-sel-count').forEach(badge => { badge.textContent = text; });
 	}
 
 	function rowSortKey(row) {
@@ -526,21 +554,20 @@ DGCA-side filler content script reads from.
 				}).then(() => {
 					chrome.runtime.sendMessage({ type: 'ROWS_QUEUED', count: merged.length, user: nextQueueUser });
 
-					const btn = document.getElementById('dgca-send-btn');
-					if (btn) {
+					const successText = `✓ ${toAdd.length} added (${merged.length} total)`;
+					document.querySelectorAll('.dgca-send-btn').forEach(btn => {
 						const orig = btn.textContent;
-						btn.textContent = `✓ ${toAdd.length} added (${merged.length} total)`;
+						btn.textContent = successText;
 						btn.style.background = '#6c757d';
 						setTimeout(() => { btn.textContent = orig; btn.style.background = ''; }, 3000);
-					}
+					});
 
 					if (isFirefox()) {
-						const toast = document.getElementById('dgca-toast-msg');
-						if (toast) {
+						document.querySelectorAll('.dgca-toast-msg').forEach(toast => {
 							toast.textContent = '👉 Click the extension icon in your toolbar to open the panel';
 							toast.style.display = 'inline-block';
 							setTimeout(() => { toast.style.display = 'none'; }, 6000);
-						}
+						});
 					}
 
 					updateSelectionBadge();
