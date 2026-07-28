@@ -74,6 +74,22 @@ header {
 	color: #ef5350;
 }
 
+/* ── Update banner ────────────────────────────────────────────────────────── */
+.update-banner {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	margin: 10px 12px 0;
+	padding: 8px 12px;
+	background: #1a3320;
+	border: 1px solid #2e6b3e;
+	border-radius: 8px;
+	color: #8ee6a0;
+	font-size: 12px;
+	font-weight: 600;
+}
+
 /* ── Cards ────────────────────────────────────────────────────────────────── */
 .card {
 	background: #1e1e2e;

@@ -230,3 +230,71 @@ async function findDgcaTab() {
 	const tabs = await chrome.tabs.query({ url: 'https://www.dgca.gov.in/*' });
 	return tabs.length > 0 ? tabs[tabs.length - 1] : null;
 }
+
+// ── Update check (browser-dependent) ──────────────────────────────────────────
+// Firefox: the extension is distributed with a standard update_url (AMO or a
+// self-hosted update manifest), so we can just ask the browser to do its own
+// update check via requestUpdateCheck — no need to hit GitHub ourselves.
+//
+// Chrome: this build isn't on the Web Store, so there's no update_url and
+// requestUpdateCheck is a no-op there. Instead we compare our own
+// manifest.json version against the latest tagged release on GitHub, and
+// store the result so the side panel can show an "Update" button linking to
+// the repo (see panel.js / GITHUB_RELEASES_URL).
+const GITHUB_REPO = 'chetiwalg-aai/DGCA-eLogBook';
+const GITHUB_RELEASES_URL = `https://github.com/${GITHUB_REPO}/releases/latest`;
+
+function compareVersions(a, b) {
+	// Returns > 0 if a > b, < 0 if a < b, 0 if equal. Handles "v" prefixes and
+	// differing segment counts (e.g. "1.2" vs "1.2.0").
+	const clean = (v) => String(v).trim().replace(/^v/i, '').split(/[.-]/).map(Number);
+	const pa = clean(a), pb = clean(b);
+	const len = Math.max(pa.length, pb.length);
+	for (let i = 0; i < len; i++) {
+		const x = pa[i] || 0, y = pb[i] || 0;
+		if (x !== y) return x - y;
+	}
+	return 0;
+}
+
+async function checkForUpdatesChrome() {
+	try {
+		const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`);
+		if (!res.ok) throw new Error(`GitHub API returned ${res.status}`);
+		const data = await res.json();
+		const latestTag = data?.tag_name || '';
+		const currentVersion = chrome.runtime.getManifest().version;
+		if (latestTag && compareVersions(latestTag, currentVersion) > 0) {
+			await chrome.storage.session.set({
+				dgca_update_available: {
+					version: latestTag.replace(/^v/i, ''),
+					url: data.html_url || GITHUB_RELEASES_URL,
+				}
+			});
+		}
+	} catch (err) {
+		console.warn('[DGCA SW] GitHub update check failed:', err);
+	}
+}
+
+function checkForUpdatesFirefox() {
+	try {
+		chrome.runtime.requestUpdateCheck((status, details) => {
+			console.log('[DGCA SW] Firefox update check:', status, details);
+			// Firefox handles the actual download/install itself; nothing for
+			// the panel to show a button for, so no storage write here.
+		});
+	} catch (err) {
+		console.warn('[DGCA SW] requestUpdateCheck failed:', err);
+	}
+}
+
+function checkForUpdates() {
+	if (IS_FIREFOX) checkForUpdatesFirefox();
+	else checkForUpdatesChrome();
+}
+
+// Startup/install only — no periodic alarm.
+chrome.runtime.onStartup?.addListener(checkForUpdates);
+chrome.runtime.onInstalled?.addListener(checkForUpdates);
+checkForUpdates();

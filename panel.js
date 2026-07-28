@@ -63,6 +63,9 @@ const wsoToggleRow = $('wso-toggle-row');
 const atsIdInfo = $('ats-id-info');
 const atsIdValue = $('ats-id-value');
 const dgcaTabStatus = $('dgca-tab-status');
+const updateBanner = $('update-banner');
+const updateBannerText = $('update-banner-text');
+const btnUpdate = $('btn-update');
 const progressSection = $('progress-section');
 const progressText = $('progress-text');
 const progressStats = $('progress-stats');
@@ -113,15 +116,17 @@ function getPillClass(status) { return PILL_CLASS[status] || PILL_CLASS[ROW_STAT
 function getPillLabel(status) { return PILL_LABEL[status] || PILL_LABEL[ROW_STATUS.PENDING]; }
 
 // ── ATS EGCA-Id override display ─────────────────────────────────────────────
-// If the imported rows carry a non-blank atsEgcaId (present on all rows if
-// present on any, since it comes from the source table's per-user column),
-// the "Use ATS as EGCA-Id" toggle is moot — the portal will match by exact
-// text anyway — so show the resolved id instead of the toggle.
+// atsEgcaId may or may not be present on any given row (it's no longer
+// guaranteed to be uniform across the whole queue), so we can only hide the
+// "Use ATS as EGCA-Id" toggle when EVERY queued row has a non-blank id —
+// the portal will match by exact text for all of them anyway. If even one
+// row is missing it, the toggle still needs to be shown so the user can pick
+// how those rows get filled.
 function updateAtsIdDisplay(rows) {
-	const firstAtsId = rows.length > 0 ? (rows[0].egcaRaw || {}).atsEgcaId : '';
-	if (firstAtsId) {
+	const allHaveAtsId = rows.length > 0 && rows.every(r => !!((r.egcaRaw || {}).atsEgcaId));
+	if (allHaveAtsId) {
 		wsoToggleRow.style.display = 'none';
-		atsIdValue.textContent = firstAtsId;
+		atsIdValue.textContent = rows[0].egcaRaw.atsEgcaId;
 		atsIdInfo.style.display = 'flex';
 	} else {
 		wsoToggleRow.style.display = 'flex';
@@ -130,10 +135,33 @@ function updateAtsIdDisplay(rows) {
 }
 
 
+// ── Update banner (Chrome only — Firefox handles its own update flow) ────────
+function renderUpdateBanner(info) {
+	if (!updateBanner) return;
+	if (info && info.url) {
+		updateBannerText.textContent = info.version
+			? `Version ${info.version} is available`
+			: 'A new version is available';
+		updateBanner.style.display = 'flex';
+		btnUpdate.onclick = () => chrome.tabs.create({ url: info.url });
+	} else {
+		updateBanner.style.display = 'none';
+		btnUpdate.onclick = null;
+	}
+}
+
+// Pick up the update check result live if it lands after the panel is
+// already open (background does its check on startup/install).
+chrome.storage.onChanged.addListener((changes, area) => {
+	if (area === 'session' && changes.dgca_update_available) {
+		renderUpdateBanner(changes.dgca_update_available.newValue || null);
+	}
+});
+
 // ── Storage load ─────────────────────────────────────────────────────────────
 function loadFromStorage() {
 	chrome.storage.session
-		.get(['dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors', 'dgca_session_ts', 'dgca_wso_ats_mode', 'dgca_wso_custom_text', 'dgca_queue_user'])
+		.get(['dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors', 'dgca_session_ts', 'dgca_wso_ats_mode', 'dgca_wso_custom_text', 'dgca_queue_user', 'dgca_update_available'])
 		.then((data) => {
 			state.useAts = (data?.dgca_wso_ats_mode || 'custom') === 'ats';
 			state.wsoCustomText = data?.dgca_wso_custom_text || 'WSO';
@@ -142,6 +170,7 @@ function loadFromStorage() {
 			wsoCustomText.value = state.wsoCustomText;
 			wsoCustomText.disabled = state.useAts;
 			state.queueUser = data?.dgca_queue_user || null;
+			renderUpdateBanner(data?.dgca_update_available || null);
 
 			const rows = data?.dgca_pending_rows || [];
 			const statuses = data?.dgca_row_status || [];
