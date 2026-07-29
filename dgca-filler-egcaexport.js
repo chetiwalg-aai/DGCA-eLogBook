@@ -43,7 +43,16 @@ values captured from the EGCA export table — no static value maps needed.
 		// ── WSO / ATS EGCA ID (by text) ──────────────────────────────────────
 		await waitForSelectOptions(SEL.wsoEgcaId);
 		if (raw.atsEgcaId) {
-			await selectByText(SEL.wsoEgcaId, raw.atsEgcaId);
+			try {
+				await selectByText(SEL.wsoEgcaId, raw.atsEgcaId);
+			} catch (err) {
+				const altText = raw.atsEgcaId.replace(/_/g, ' ');
+				if (altText !== raw.atsEgcaId) {
+					await selectByText(SEL.wsoEgcaId, altText);
+				} else {
+					throw err;
+				}
+			}
 		} else {
 			await selectByText(SEL.wsoEgcaId, wsoAtsText);
 		}
