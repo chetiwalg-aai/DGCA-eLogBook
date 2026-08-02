@@ -57,12 +57,15 @@ values captured from the EGCA export table — no static value maps needed.
 			await selectByText(SEL.wsoEgcaId, wsoAtsText);
 		}
 
-		// ── Rating (by text) ─────────────────────────────────────────────────
-		await selectByText(SEL.ratingId, raw.rating);
 
-		// ── ATS Unit (by text) ───────────────────────────────────────────────
-		await waitForSelectOptions(SEL.atsUnitId);
-		await selectByText(SEL.atsUnitId, raw.atsUnit.replace(/-/g, ''));
+		if (raw.rating) {
+			// ── Rating (by text) ─────────────────────────────────────────────────
+			await selectByText(SEL.ratingId, raw.rating);
+
+			// ── ATS Unit (by text) ───────────────────────────────────────────────
+			await waitForSelectOptions(SEL.atsUnitId);
+			await selectByText(SEL.atsUnitId, raw.atsUnit.replace(/-/g, ''));
+		}
 
 		// ── Type of Duty (by text) ───────────────────────────────────────────
 		await selectByText(SEL.typeOfDutyId, raw.typeOfDuty);
@@ -91,7 +94,10 @@ values captured from the EGCA export table — no static value maps needed.
 				await selectByText(SEL.ojtEnv, raw.ojtEnv);
 				await typeIntoField(SEL.traineeAtcol, raw.traineeLicense);
 				const instructorField = await waitForFieldValue('#nameOfInstructor');
-				if (raw.traineeName && !namesMatch(instructorField.value, raw.traineeName)) {
+				// if (raw.traineeLicenType === "SATCOL" && raw.traineeName && !namesMatch(instructorField.value, raw.traineeName)) {
+				if (raw.traineeLicenType === "SATCOL" && raw.traineeName) {
+					await typeIntoField('#nameOfInstructor', raw.traineeName.toUpperCase());
+				} else if (raw.traineeName && !namesMatch(instructorField.value, raw.traineeName)) {
 					await typeIntoField('#nameOfInstructor', raw.traineeName.toUpperCase());
 				}
 			}
@@ -118,7 +124,10 @@ values captured from the EGCA export table — no static value maps needed.
 				await selectByText(SEL.ojtEnv, raw.ojtEnv);
 				await typeIntoField(SEL.traineeAtcol, raw.traineeLicense);
 				const instructorField = await waitForFieldValue('#nameOfInstructor');
-				if (raw.traineeName && !namesMatch(instructorField.value, raw.traineeName)) {
+				// if (raw.traineeLicenType === "SATCOL" && raw.traineeName && !namesMatch(instructorField.value, raw.traineeName)) {
+				if (raw.traineeLicenType === "SATCOL" && raw.traineeName) {
+					await typeIntoField('#nameOfInstructor', raw.traineeName.toUpperCase());
+				} else if (raw.traineeName && !namesMatch(instructorField.value, raw.traineeName)) {
 					await typeIntoField('#nameOfInstructor', raw.traineeName.toUpperCase());
 				}
 			}
