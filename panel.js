@@ -560,3 +560,14 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 loadFromStorage();
 checkDgcaTab();
+
+// ── Footer version display ─────────────────────────────────────────────────
+(function showAppVersion() {
+	const versionEl = document.getElementById('app-version');
+	if (!versionEl) return;
+	try {
+		versionEl.textContent = chrome.runtime.getManifest().version;
+	} catch (err) {
+		console.warn('[DGCA Panel] Could not read manifest version:', err);
+	}
+})();

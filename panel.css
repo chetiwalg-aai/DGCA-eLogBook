@@ -581,6 +581,12 @@ header {
 	font-weight: 600;
 }
 
+.footer-credit__version {
+	margin-top: 2px;
+	font-size: 10px;
+	color: #6a6a8a;
+}
+
 /* ── Top-level session error pill ─────────────────────────────────────────── */
 .pill--top-error {
 	background: #3d1515;

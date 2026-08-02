@@ -18,22 +18,23 @@ DGCA-side filler content script reads from.
 		'ATS_EGCA_ID', 'RATING', 'ATS_UNIT', 'BRIEFING_DONE',
 		'TYPE_OF_DUTY', 'START_TIME', 'END_TIME', 'TOTAL_DURATION',
 		'REMARKS', 'KNOWLEDGE_CHECK', 'SKILL_TEST_CHECK', 'OJT_PROVIDED_CHECK',
-		'OJT_ENV', 'TRAINEE_LICENSE', 'TRAINEE_NAME', 'INSTRUCTOR_LICENSE',
-		'INSTRUCTOR_NAME', 'PROFICIENCY_CHECK', 'NEWLY_ESTAB_STATION',
+		'OJT_ENV', 'TRAINEE_LICENSE', 'TRAINEE_LICEN_TYPE', 'TRAINEE_NAME',
+		'INSTRUCTOR_LICENSE', 'INSTRUCTOR_NAME', 'PROFICIENCY_CHECK', 'NEWLY_ESTAB_STATION',
 	];
 
 	// Kept only as a fallback for the (unlikely) case the header row can't be
 	// read at all — mirrors the last known-good column order. Current as of
-	// the CSV_SCHEMA_VERSION column being added at position 0, shifting
-	// every subsequent column right by one versus the previous layout.
+	// the TRAINEE_LICEN_TYPE column being added between TRAINEE_LICENSE and
+	// TRAINEE_NAME, shifting every column from TRAINEE_NAME onward right by
+	// one versus the previous layout.
 	const EGCA_COL_FALLBACK = {
 		CSV_SCHEMA_VERSION: 0,
 		FROM_DATE: 1, TO_DATE: 2, POSTING_STATION: 3, ICAO_CODE: 4,
 		ATS_EGCA_ID: 5, RATING: 6, ATS_UNIT: 7, BRIEFING_DONE: 8,
 		TYPE_OF_DUTY: 9, START_TIME: 10, END_TIME: 11, TOTAL_DURATION: 12,
 		REMARKS: 13, KNOWLEDGE_CHECK: 14, SKILL_TEST_CHECK: 15, OJT_PROVIDED_CHECK: 16,
-		OJT_ENV: 17, TRAINEE_LICENSE: 18, TRAINEE_NAME: 19, INSTRUCTOR_LICENSE: 20,
-		INSTRUCTOR_NAME: 21, PROFICIENCY_CHECK: 22, NEWLY_ESTAB_STATION: 23
+		OJT_ENV: 17, TRAINEE_LICENSE: 18, TRAINEE_LICEN_TYPE: 19, TRAINEE_NAME: 20,
+		INSTRUCTOR_LICENSE: 21, INSTRUCTOR_NAME: 22, PROFICIENCY_CHECK: 23, NEWLY_ESTAB_STATION: 24
 	};
 
 	let _offset = 0;
@@ -198,6 +199,7 @@ DGCA-side filler content script reads from.
 		const rawOjtEnv = getText('OJT_ENV');
 		const rawTraineeName = getText('TRAINEE_NAME');
 		const rawTraineeLicense = getText('TRAINEE_LICENSE');
+		const rawTraineeLicenType = getText('TRAINEE_LICEN_TYPE');
 		const rawInstructorName = getText('INSTRUCTOR_NAME');
 		const rawInstructorLicense = getText('INSTRUCTOR_LICENSE');
 		const rawProficiencyCheck = getText('PROFICIENCY_CHECK');
@@ -246,6 +248,7 @@ DGCA-side filler content script reads from.
 				ojtEnv: rawOjtEnv,
 				traineeName: rawTraineeName,
 				traineeLicense: rawTraineeLicense,
+				traineeLicenType: rawTraineeLicenType,
 				instructorName: rawInstructorName,
 				instructorLicense: rawInstructorLicense,
 				proficiencyCheck: rawProficiencyCheck,
