@@ -64,7 +64,21 @@ value maps needed.
 	const SESSION_STATE_EVENT = 'dgca_session_state_changed';
 	function notifySessionState(running) {
 		try {
-			window.dispatchEvent(new CustomEvent(SESSION_STATE_EVENT, { detail: { running: !!running } }));
+			const detail = { running: !!running };
+			// Firefox wraps objects created by an isolated-world content
+			// script in an Xray wrapper, so the page's MAIN-world listener
+			// (alert-interceptor.js) can see the event fire but can't read
+			// properties off `detail` — it comes through as effectively
+			// undefined, so _sessionRunning there never flips and native
+			// dialogs never get auto-dismissed. cloneInto() (a Firefox-only
+			// content-script global — absent in Chrome, hence the feature
+			// check) makes a plain clone in the page's own scope that it
+			// can read normally. Chrome has no such restriction and no
+			// cloneInto, so it just uses the object as-is.
+			const eventDetail = (typeof cloneInto === 'function')
+				? cloneInto(detail, window)
+				: detail;
+			window.dispatchEvent(new CustomEvent(SESSION_STATE_EVENT, { detail: eventDetail }));
 		} catch (_) { }
 		document.getElementById('dgca-ext-toolbar')?.classList.toggle('dgca-ext-toolbar--session-running', !!running);
 		// Persisted (not just an in-page event) so the popup and the
@@ -1853,7 +1867,10 @@ value maps needed.
 		if (_observerScheduled) return;
 		if (!_mutationsLookRelevant(mutations)) return;
 		_observerScheduled = true;
-		(window.requestAnimationFrame || ((cb) => setTimeout(cb, 16)))(() => {
+		const raf = window.requestAnimationFrame
+			? (cb) => window.requestAnimationFrame(cb)
+			: (cb) => setTimeout(cb, 16);
+		raf(() => {
 			_observerScheduled = false;
 			setupInlineToolbar();
 		});
@@ -1875,6 +1892,24 @@ value maps needed.
 		_aborted = false;
 		_expandedRows.clear();
 		hideToolbarError();
+
+		// Reset every row to 'pending' and clear stale errors/timings from
+		// a previous session, and AWAIT that write, before the first
+		// refreshToolbar() call below. refreshToolbar() reads status fresh
+		// from storage each time it's called — call it before this write
+		// lands and it's a race: it can (and, per report, often does) read
+		// back last session's still-present 'submitted'/'error' statuses,
+		// leaving stale pills showing for every row not yet reached by the
+		// loop further down.
+		const statuses = rows.map(() => 'pending');
+		const errors = {};
+		const timings = {};
+		await window.DGCA_STORAGE.set({
+			dgca_row_status: statuses,
+			dgca_row_errors: errors,
+			dgca_row_timings: timings,
+		});
+
 		showToolbarProgress('Starting…');
 		updateToolbarProgressBar(0, 0, rows.length);
 		refreshToolbar();
@@ -1888,15 +1923,10 @@ value maps needed.
 		_toolbarObserver.disconnect();
 
 		try {
-			const statuses = rows.map(() => 'pending');
-			const errors = {};
-			const timings = {};
 			const _wsoAtsData = await window.DGCA_STORAGE.get(['dgca_wso_ats_mode', 'dgca_wso_custom_text']).catch(() => ({}));
 			const wsoAtsText = (_wsoAtsData?.dgca_wso_ats_mode === 'ats')
 				? 'ATS'
 				: (_wsoAtsData?.dgca_wso_custom_text || 'WSO');
-
-			await window.DGCA_STORAGE.set({ dgca_row_status: statuses });
 
 			for (let i = 0; i < rows.length; i++) {
 				if (_aborted) break;

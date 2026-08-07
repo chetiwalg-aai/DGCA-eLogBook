@@ -135,7 +135,10 @@
 			// requestAnimationFrame batches with the browser's render cadence;
 			// fall back to a short timeout on the rare chance it's unavailable
 			// this early in the page lifecycle.
-			(window.requestAnimationFrame || ((cb) => setTimeout(cb, 16)))(processPending);
+			const raf = window.requestAnimationFrame
+				? (cb) => window.requestAnimationFrame(cb)
+				: (cb) => setTimeout(cb, 16);
+			raf(processPending);
 		});
 		observer.observe(document.body, { childList: true, subtree: true });
 	}
