@@ -1213,7 +1213,7 @@ value maps needed.
 		toolbar.innerHTML = `
 			<div class="dgca-ext-toolbar-label">
 				<span>✈ <span class="dgca-ext-shimmer-text dgca-ext-shimmer-text--title">DGCA eLogBook Automator</span></span>
-				<a class="dgca-ext-video-guide" href="https://youtu.be/qVMiYGiWJ-E" target="_blank" rel="noopener noreferrer">▶ Video Guide</a>
+				<a class="dgca-ext-video-guide" href="https://youtu.be/xppOqtbQIps" target="_blank" rel="noopener noreferrer">▶ Video Guide</a>
 			</div>
 			<div class="dgca-ext-divider"></div>
 			<div class="dgca-ext-columns">
