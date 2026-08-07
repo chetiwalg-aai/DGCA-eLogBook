@@ -1,0 +1,229 @@
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+	margin: 0;
+	padding: 0;
+}
+
+body {
+	font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+	font-size: 13px;
+	background: #0f0f1a;
+	color: #e0e0e0;
+	width: 300px;
+}
+
+a {
+	color: #4fc3f7;
+}
+
+header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 12px 16px;
+	background: #1a1a2e;
+	border-bottom: 1px solid #2a2a3e;
+}
+
+.logo {
+	font-weight: 700;
+	font-size: 14px;
+	letter-spacing: 0.3px;
+}
+
+/* Same shimmer technique as the in-page toolbar (dgca-filler.js). The icon
+   /emoji next to the shimmered text stays outside this span — color emoji
+   glyphs don't clip reliably with -webkit-background-clip: text and will
+   flicker if included.
+   The gradient tile is sized to 3x the text's own width (background-size:
+   300%, relative to the element itself since it's the background-painting
+   area) and only ever travels from background-position 100% to 0%. At both
+   ends of that range the 3x-wide tile still fully overlaps the element (do
+   the offset math: with a tile 3x the container, position 0%..100% keeps
+   the container within the tile's span throughout) — so the base shimmer
+   color always sits behind the text and it never drops to fully transparent
+   mid-loop. Only the bright highlight band drifts across and off the edges.
+   This also keeps the animation reflow-safe (percentages, not px), since it
+   auto-scales if the text width ever changes (e.g. a late webfont swap). */
+.shimmer-text {
+	background-image: linear-gradient(90deg,
+		var(--shimmer-base) 0%, var(--shimmer-base) 40%,
+		var(--shimmer-hi) 50%,
+		var(--shimmer-base) 60%, var(--shimmer-base) 100%);
+	background-size: 300% 100%;
+	background-repeat: no-repeat;
+	-webkit-background-clip: text;
+	background-clip: text;
+	-webkit-text-fill-color: transparent;
+	color: transparent;
+	display: inline-block;
+	animation: shimmer-text 6s linear infinite;
+}
+
+@keyframes shimmer-text {
+	from { background-position: 100% 0; }
+	to   { background-position: 0% 0; }
+}
+
+.shimmer-text--logo {
+	--shimmer-base: #cfd3e0;
+	--shimmer-hi: #ffffff;
+}
+
+.shimmer-text--footer {
+	--shimmer-base: #4fc3f7;
+	--shimmer-hi: #ffffff;
+	animation-duration: 7s;
+}
+
+.badge {
+	font-size: 11px;
+	font-weight: 600;
+	padding: 3px 8px;
+	border-radius: 999px;
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+}
+
+.badge--idle {
+	background: #2a2a3e;
+	color: #aab0c0;
+}
+
+.badge--queued {
+	background: #2d4a1e;
+	color: #8bc34a;
+}
+
+.update-banner {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	margin: 10px 12px 0;
+	padding: 8px 12px;
+	background: #1a3320;
+	border: 1px solid #2e6b3e;
+	border-radius: 8px;
+	color: #8ee6a0;
+	font-size: 12px;
+	font-weight: 600;
+}
+
+.hint {
+	font-size: 12px;
+	line-height: 1.7;
+	color: #b5b5c5;
+	padding: 12px 16px 0;
+}
+
+.card {
+	background: #1e1e2e;
+	border: 1px solid #2a2a3e;
+	border-radius: 8px;
+	padding: 12px 14px;
+	margin: 10px 12px 0;
+}
+
+.queue-info {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+}
+
+.queue-count {
+	font-weight: 600;
+	color: #4fc3f7;
+}
+
+.queue-user-info {
+	font-size: 11px;
+	color: #b5b5c5;
+	padding-top: 8px;
+	margin-top: 8px;
+	border-top: 1px solid #2a2a3e;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.queue-user-info strong {
+	color: #4fc3f7;
+	font-weight: 700;
+}
+
+.queue-user-info .queue-user-login {
+	color: #8a8a9e;
+}
+
+.controls {
+	display: flex;
+	gap: 8px;
+	padding: 12px;
+}
+
+.btn {
+	padding: 7px 14px;
+	border: none;
+	border-radius: 6px;
+	font-size: 13px;
+	font-weight: 600;
+	cursor: pointer;
+	transition: opacity 0.15s, filter 0.15s;
+	width: 100%;
+}
+
+.btn:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+
+.btn:not(:disabled):hover {
+	filter: brightness(1.15);
+}
+
+.btn--primary {
+	background: #4fc3f7;
+	color: #0a0a14;
+}
+
+.btn--ghost {
+	background: #23233a;
+	border: 1px solid #4a4a6e;
+	color: #cfd3e0;
+}
+
+.btn--ghost:not(:disabled):hover {
+	background: #2c2c48;
+	border-color: #6a6a9e;
+	color: #fff;
+}
+
+.btn--sm {
+	padding: 4px 10px;
+	font-size: 12px;
+	width: auto;
+}
+
+.footer-credit {
+	text-align: center;
+	font-size: 11px;
+	color: #bdbdd7;
+	padding: 6px 12px 14px;
+}
+
+.footer-credit__name {
+	/* color intentionally omitted — the shimmer-text/shimmer-text--footer
+	   classes (also applied to this element) own the color via a clipped
+	   gradient; declaring a plain color here would win the cascade (same
+	   specificity, declared later) and silently kill the shimmer clip. */
+	font-weight: 600;
+}
+
+.footer-credit__version {
+	margin-top: 2px;
+	font-size: 10px;
+	color: #6a6a8a;
+}

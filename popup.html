@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8">
+	<title>DGCA eLogBook</title>
+	<link rel="stylesheet" href="popup.css">
+</head>
+
+<body>
+	<header>
+		<div class="logo">✈ <span class="shimmer-text shimmer-text--logo">DGCA eLogBook</span></div>
+		<span id="badge" class="badge badge--idle">Idle</span>
+	</header>
+
+	<div id="update-banner" class="update-banner" style="display: none;">
+		<span id="update-banner-text">Update available</span>
+		<button id="btn-update" class="btn btn--primary btn--sm">Update ▶</button>
+	</div>
+
+	<main>
+		<div class="hint">
+			Video Guide -> <a href="https://youtu.be/qVMiYGiWJ-E" target="_blank" rel="noopener noreferrer">Youtube</a><br>
+			Rows are queued from the EGCA Export page and managed on the DGCA
+			e-Log Book page itself — use the toolbar there to view, start,
+			abort, or edit the queue row by row.
+		</div>
+
+		<div id="queue-section" class="card">
+			<div class="queue-info">
+				<span id="queue-count" class="queue-count">0 rows queued</span>
+			</div>
+			<div id="queue-user-info" class="queue-user-info" style="display: none;"></div>
+		</div>
+
+		<div class="controls">
+			<button id="btn-clear" class="btn btn--ghost">🗑 Clear All</button>
+		</div>
+
+		<div class="footer-credit">
+			Made with ❤️ by <span class="shimmer-text shimmer-text--footer footer-credit__name">Gaurav Chetiwal</span> © 2026
+			<div class="footer-credit__version">v<span id="app-version">…</span></div>
+		</div>
+	</main>
+
+	<script src="shared.js"></script>
+	<script src="popup.js"></script>
+</body>
+
+</html>

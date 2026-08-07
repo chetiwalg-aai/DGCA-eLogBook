@@ -1,13 +1,12 @@
 {
 	"manifest_version": 3,
 	"name": "DGCA eLogBook Automator",
-	"version": "2.0.8",
+	"version": "2.1.0",
 	"description": "Parse data from AAI EGCAexport and auto-fill DGCA eLogBook entries",
 	"browser_specific_settings": {
 		"gecko": {
-			"id": "egca-autofill-selfhosted@chetiwalg",
+			"id": "egca-autofill@chetiwalg",
 			"strict_min_version": "128.0",
-			"update_url": "https://raw.githubusercontent.com/chetiwalg-aai/DGCA-eLogBook/main/updates.json",
 			"data_collection_permissions": {
 				"required": [
 					"none"
@@ -19,8 +18,7 @@
 		"activeTab",
 		"scripting",
 		"storage",
-		"tabs",
-		"sidePanel"
+		"tabs"
 	],
 	"host_permissions": [
 		"https://iamatc.aai.aero/*",
@@ -47,7 +45,7 @@
 		},
 		{
 			"matches": [
-				"https://www.dgca.gov.in/*"
+				"https://www.dgca.gov.in/digigov-portal/web?*"
 			],
 			"js": [
 				"alert-interceptor.js"
@@ -57,30 +55,18 @@
 		},
 		{
 			"matches": [
-				"https://www.dgca.gov.in/*"
+				"https://www.dgca.gov.in/digigov-portal/web?*"
 			],
 			"js": [
 				"shared.js",
 				"storage-bridge.js",
-				"dgca-filler-common.js",
-				"dgca-filler-egcaexport.js"
+				"dgca-filler.js"
 			],
 			"run_at": "document_idle"
 		}
 	],
-	"side_panel": {
-		"default_path": "panel.html"
-	},
-	"sidebar_action": {
-		"default_panel": "panel.html",
-		"default_title": "DGCA eLogBook Automator",
-		"default_icon": {
-			"16": "icons/icon16.png",
-			"48": "icons/icon48.png",
-			"128": "icons/icon128.png"
-		}
-	},
 	"action": {
+		"default_popup": "popup.html",
 		"default_title": "DGCA eLogBook Automator",
 		"default_icon": {
 			"16": "icons/icon16.png",

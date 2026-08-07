@@ -1,18 +1,11 @@
-/**
-injector.js
-Runs on: https://iamatc.aai.aero/atc/EGcAexport*
-Adds row checkboxes + a "Add to DGCA Queue" button to the EGcAexport table
-and pushes selected rows into the shared session-storage queue that the
-DGCA-side filler content script reads from.
-*/
+// Runs on https://iamatc.aai.aero/atc/EGcAexport* — adds row checkboxes and
+// one or more "Add to DGCA Queue" buttons, pushing selected rows into the
+// shared queue that dgca-filler.js's toolbar reads on the DGCA portal.
 (function () {
 	'use strict';
 
-	// Column positions in the EGcAexport table are looked up by header text
-	// rather than hard-coded indices, since the source table's columns have
-	// changed order/count more than once (e.g. a CSV_SCHEMA_VERSION column
-	// was added). As long as a <th> with the expected label exists somewhere
-	// in the header row, its data will be found regardless of position.
+	// Columns are looked up by header text, not fixed index, since column
+	// order in this table has changed before.
 	const EGCA_COL_NAMES = [
 		'FROM_DATE', 'TO_DATE', 'POSTING_STATION', 'ICAO_CODE',
 		'ATS_EGCA_ID', 'RATING', 'ATS_UNIT', 'BRIEFING_DONE',
@@ -22,13 +15,11 @@ DGCA-side filler content script reads from.
 		'INSTRUCTOR_LICENSE', 'INSTRUCTOR_NAME', 'PROFICIENCY_CHECK', 'NEWLY_ESTAB_STATION',
 	];
 
-	// Kept only as a fallback for the (unlikely) case the header row can't be
-	// read at all — mirrors the last known-good column order. Current as of
-	// the TRAINEE_LICEN_TYPE column being added between TRAINEE_LICENSE and
-	// TRAINEE_NAME, shifting every column from TRAINEE_NAME onward right by
-	// one versus the previous layout.
+	// Positional fallback, used only when the header row can't be read by
+	// name (see buildHeaderMap). Index 0 is intentionally unused/reserved so
+	// FROM_DATE lines up with column 1 in the underlying table; kept in
+	// sync with EGCA_COL_NAMES above.
 	const EGCA_COL_FALLBACK = {
-		CSV_SCHEMA_VERSION: 0,
 		FROM_DATE: 1, TO_DATE: 2, POSTING_STATION: 3, ICAO_CODE: 4,
 		ATS_EGCA_ID: 5, RATING: 6, ATS_UNIT: 7, BRIEFING_DONE: 8,
 		TYPE_OF_DUTY: 9, START_TIME: 10, END_TIME: 11, TOTAL_DURATION: 12,
@@ -37,18 +28,24 @@ DGCA-side filler content script reads from.
 		INSTRUCTOR_LICENSE: 21, INSTRUCTOR_NAME: 22, PROFICIENCY_CHECK: 23, NEWLY_ESTAB_STATION: 24
 	};
 
+	// sortQueue/escAttr live in shared.js (window.DGCA) so this file and the
+	// DGCA-side toolbar (dgca-filler.js) share one implementation of queue
+	// sorting/escaping instead of two copies that could drift apart.
+	const { sortQueue, escAttr } = window.DGCA;
+
 	let _offset = 0;
 	let _selectedRows = {};
 	let _headerMap = null; // EGCA_COL_NAMES entry -> column index in the *original* table (before our injected checkbox column)
+	let _usingFallbackMap = false; // true once buildHeaderMap() has failed to read the header row at least once
 
 	function _normHeader(s) {
 		return String(s || '').replace(/\s+/g, ' ').trim().toUpperCase();
 	}
 
-	// Scans the table's header row(s) and builds a name -> column-index map.
+	// Scans the table's header row and builds a name -> column-index map.
 	// Ignores our own injected checkbox <th> so indices line up with the
-	// original (unmodified) table markup, matching how _offset is used
-	// elsewhere (0 before we inject the checkbox column, 1 after).
+	// original (unmodified) table markup — matching how _offset is used
+	// elsewhere (0 before the checkbox column is injected, 1 after).
 	function buildHeaderMap(table) {
 		const thead = table.querySelector('thead');
 		if (!thead) return null;
@@ -75,24 +72,20 @@ DGCA-side filler content script reads from.
 		const map = buildHeaderMap(table);
 		if (map) _headerMap = map;
 		else if (!_headerMap) _headerMap = null; // will fall back per-field below
+
+		// Tracks whether any column fell back to positional lookup, since
+		// positional lookup has no guarantee it's reading the right cell if
+		// columns were reordered — drives the stricter validateParsedRow()
+		// checks below.
+		_usingFallbackMap = !_headerMap || EGCA_COL_NAMES.some(n => !(n in _headerMap));
 	}
 
-	// Resolves a logical column name to its cell index for the given row,
+	// Resolves a logical column name to its cell index for the current row,
 	// preferring the live header map and falling back to the last known-good
 	// static layout if the header row is ever unreadable.
 	function colIndex(name) {
 		if (_headerMap && name in _headerMap) return _headerMap[name];
 		return EGCA_COL_FALLBACK[name];
-	}
-
-	// Firefox's sidebarAction.open() requires a direct, synchronous call from
-	// a genuine user-gesture event handler — unlike Chrome's sidePanel.open(),
-	// it does NOT honor gesture context relayed through runtime.sendMessage.
-	// So on Firefox, the background script's attempt to auto-open the sidebar
-	// from OPEN_SIDE_PANEL silently fails, and we need to tell the user to
-	// click the toolbar icon themselves instead.
-	function isFirefox() {
-		return typeof navigator !== 'undefined' && /Firefox\//.test(navigator.userAgent || '');
 	}
 
 	function getAaiUser() {
@@ -114,14 +107,25 @@ DGCA-side filler content script reads from.
 		return !!(existingRowCount > 0 && queueUser && currentUser && queueUser.loginId && currentUser.loginId && queueUser.loginId !== currentUser.loginId);
 	}
 
+	// Keeps the user-mismatch warning, the Clear Queue button, and the Add
+	// to DGCA Queue button in sync with current queue state. Clear Queue is
+	// always visible (not just on a mismatch) so clearing a stale queue
+	// doesn't require switching to the DGCA-side toolbar. Both buttons are
+	// disabled while a fill session is running on that toolbar, since it is
+	// actively iterating dgca_pending_rows by index and writing
+	// dgca_row_status/dgca_row_errors as it goes — mutating the queue
+	// concurrently would desync those indices.
 	async function refreshUserMismatchIndicator() {
 		try {
 			const warnEls = document.querySelectorAll('.dgca-user-warn');
-			if (warnEls.length === 0) return;
+			const clearBtns = document.querySelectorAll('.dgca-clear-queue-btn');
+			const sendBtns = document.querySelectorAll('.dgca-send-btn');
+			if (warnEls.length === 0 && clearBtns.length === 0 && sendBtns.length === 0) return;
 
-			const data = await window.DGCA_STORAGE.get(['dgca_pending_rows', 'dgca_queue_user']);
+			const data = await window.DGCA_STORAGE.get(['dgca_pending_rows', 'dgca_queue_user', 'dgca_session_running']);
 			const existing = data?.dgca_pending_rows || [];
 			const queueUser = data?.dgca_queue_user || null;
+			const sessionRunning = !!data?.dgca_session_running;
 			const current = getAaiUser();
 
 			const mismatch = isUserMismatch(current, queueUser, existing.length);
@@ -133,12 +137,50 @@ DGCA-side filler content script reads from.
 					warnEl.style.display = 'none';
 				}
 			});
+			clearBtns.forEach(btn => {
+				btn.style.display = 'inline-block';
+				btn.disabled = existing.length === 0 || sessionRunning;
+				btn.title = sessionRunning ? 'Cannot clear while a fill session is running on the DGCA tab' : '';
+			});
+			sendBtns.forEach(btn => {
+				btn.disabled = sessionRunning;
+				btn.title = sessionRunning ? 'Cannot add to queue while a fill session is running on the DGCA tab' : '';
+			});
 		} catch (_) { }
 	}
 
-	// ATS_EGCA_ID's option value/text both carry the same "NAME (ID)" label
-	// in this table, so reading either works; prefer the visible text since
-	// that's what has to match against the DGCA-side dropdown later.
+	// Clears the shared queue from this page, so the user doesn't have to
+	// switch to the DGCA-side toolbar just to press Clear All there.
+	async function clearQueue() {
+		try {
+			const data = await window.DGCA_STORAGE.get(['dgca_session_running']);
+			if (data?.dgca_session_running) {
+				alert('A fill session is currently running on the DGCA tab. Please wait for it to finish or abort it there before clearing the queue.');
+				refreshUserMismatchIndicator();
+				return;
+			}
+		} catch (_) { }
+		if (!confirm('Clear the entire DGCA queue?')) return;
+		try {
+			await window.DGCA_STORAGE.remove([
+				'dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors', 'dgca_row_timings', 'dgca_session_ts', 'dgca_queue_user',
+			]);
+			updateSelectionBadge();
+			// No direct refreshUserMismatchIndicator() call here: removing
+			// dgca_pending_rows/dgca_queue_user fires the window.DGCA_STORAGE
+			// .onChanged listener registered in ensureButtonInjected(), which
+			// already calls it — calling it again would just repeat the same
+			// storage read + DOM update a moment later.
+		} catch (err) {
+			console.error('[DGCA] Failed to clear queue:', err);
+			alert('Failed to clear queue. Please try again.');
+		}
+	}
+
+	// ATS_EGCA_ID's option value and text both carry the same "NAME (ID)"
+	// label in this table, so either can be read; the visible text is
+	// preferred since that's what has to match against the DGCA-side
+	// dropdown later.
 	function _selectCellText(select) {
 		const opt = select.options[select.selectedIndex];
 		if (!opt || !opt.value) return '';
@@ -146,9 +188,9 @@ DGCA-side filler content script reads from.
 	}
 
 	// Reads a cell by logical column name. Handles both plain
-	// contenteditable text cells and the ATS_EGCA_ID cell, which can now be
+	// contenteditable text cells and the ATS_EGCA_ID cell, which can be
 	// either a <select class="ats-egca-picker"> (pick from known
-	// name+EGCA-ID pairs) or plain free-text, depending on the row.
+	// name+EGCA-ID pairs) or plain free text, depending on the row.
 	function cellText(tr, colName) {
 		const idx = colIndex(colName);
 		if (idx === undefined || idx === null) return '';
@@ -166,11 +208,33 @@ DGCA-side filler content script reads from.
 		return /^\d{2}\/\d{2}\/\d{4}$/.test(dateText);
 	}
 
+	// Sanity-checks a few distinctly-shaped columns to catch a shifted
+	// positional map before it silently queues misaligned data.
+	function validateParsedRow(row) {
+		const raw = row.egcaRaw;
+		const checks = [
+			[/^\d{2}-\d{2}-\d{4}$/.test(raw.toDate), 'TO_DATE'],       // normaliseEgcaDate() output, DD-MM-YYYY
+			[/^\d{2}:\d{2}$/.test(raw.startTime), 'START_TIME'],
+			[/^\d{2}:\d{2}$/.test(raw.endTime), 'END_TIME'],
+			[/^[A-Z0-9]{3,4}$/.test(row.station), 'ICAO_CODE'],
+		];
+		const failed = checks.filter(([ok]) => !ok).map(([, name]) => name);
+		if (failed.length > 0) {
+			console.warn(
+				'[DGCA Injector] Positional fallback column map produced a row that fails shape validation for:',
+				failed.join(', '),
+				'— skipping this row rather than queuing possibly-misaligned data. Raw row:', raw
+			);
+			return false;
+		}
+		return true;
+	}
+
 	function rowId(date, station, timeFrom, timeTo, dutyType) {
 		return `${date}|${station}|${timeFrom}|${timeTo}|${dutyType}`;
 	}
 
-	// Convert EGCA date DD/MM/YYYY → DD-MM-YYYY (shared queue format).
+	// Converts an EGCA date DD/MM/YYYY to the shared queue's DD-MM-YYYY format.
 	function normaliseEgcaDate(dateStr) {
 		const s = String(dateStr || '').trim();
 		if (/^\d{2}-\d{2}-\d{4}$/.test(s)) return s;
@@ -212,10 +276,10 @@ DGCA-side filler content script reads from.
 		const dutyType = rawTypeOfDuty;
 		const atsUnit = rawAtsUnit;
 
-		return {
+		const row = {
 			id: rowId(date, station, timeFrom, timeTo, dutyType),
 
-			// ── Normalised camelCase schema (shared with panel.js & filler) ─────
+			// ── Normalised camelCase schema (consumed by the DGCA toolbar) ──────
 			date,
 			station,
 			timeFrom,
@@ -255,6 +319,9 @@ DGCA-side filler content script reads from.
 				newlyEstabStation: rawNewlyEstab,
 			},
 		};
+
+		if (_usingFallbackMap && !validateParsedRow(row)) return null;
+		return row;
 	}
 
 	let _headerInjected = false;
@@ -296,9 +363,9 @@ DGCA-side filler content script reads from.
 		_headerInjected = true;
 	}
 
-	// Returns EVERY "Download eGCA CSV" button on the page (there can be more
+	// Returns every "Download eGCA CSV" button on the page (there can be more
 	// than one — e.g. one above the preview table and one below it), not just
-	// the last one, so a queue button can be injected alongside each of them.
+	// the last one, so a queue button is injected alongside each.
 	function findDownloadCsvButtons() {
 		const candidates = Array.from(document.querySelectorAll('button, a.btn, a'));
 		const matches = candidates.filter(el => {
@@ -307,20 +374,18 @@ DGCA-side filler content script reads from.
 			return (text.includes('download') && text.includes('csv')) ||
 				onclick.includes('downloadEgcaCsv');
 		});
-		// De-dupe in case an element matches via both text and onclick checks
-		// or appears twice in the candidate list for some other reason.
+		// De-dupe in case an element matches via both text and onclick checks.
 		return Array.from(new Set(matches));
 	}
-	
 
 	// Builds one queue-button instance (button + selection badge + warning +
-	// toast) and inserts it right after the given download button. `idSuffix`
-	// is '' for the first instance (keeps the original element IDs, since
-	// other code such as the success-state toggle in onSendClick still looks
-	// those up directly) and e.g. '-2', '-3' for subsequent instances so IDs
-	// stay unique across the page. All instances share the dgca-* classes so
-	// updateSelectionBadge/refreshUserMismatchIndicator/onSendClick can keep
-	// every copy in sync at once.
+	// toast) and inserts it right after the given download button. idSuffix
+	// is '' for the first instance, keeping the original element IDs (other
+	// code such as the success-state toggle in onSendClick looks those up
+	// directly), and e.g. '-2', '-3' for subsequent instances so IDs stay
+	// unique across the page. Every instance shares the same dgca-* classes
+	// so updateSelectionBadge/refreshUserMismatchIndicator/onSendClick keep
+	// all copies in sync at once.
 	function injectButtonInstance(downloadBtn, idSuffix) {
 		const wrapper = document.createElement('div');
 		wrapper.className = 'dgca-inline-btn-wrapper';
@@ -328,7 +393,7 @@ DGCA-side filler content script reads from.
 		wrapper.style.cssText = 'display:inline-flex; align-items:center; gap:10px; margin-left:12px; vertical-align:middle;';
 
 		const sendBtn = document.createElement('button');
-		sendBtn.className = 'btn btn-success btn-sm dgca-send-btn';
+		sendBtn.className = 'btn btn-success btn-sm dgca-send-btn dgca-ext-shimmer-btn';
 		if (!idSuffix) sendBtn.id = 'dgca-send-btn';
 		sendBtn.style.cssText = 'font-weight:600; padding:8px 16px;';
 		sendBtn.textContent = '✈ Add to DGCA Queue ▶';
@@ -344,6 +409,17 @@ DGCA-side filler content script reads from.
 		if (!idSuffix) userWarn.id = 'dgca-user-warn';
 		userWarn.style.cssText = 'font-size:13px; color:#c0392b; font-weight:700; display:none;';
 
+		const clearQueueBtn = document.createElement('button');
+		clearQueueBtn.className = 'btn btn-outline-danger btn-sm dgca-clear-queue-btn';
+		if (!idSuffix) clearQueueBtn.id = 'dgca-clear-queue-btn';
+		clearQueueBtn.type = 'button';
+		// Always visible (not only on a user mismatch) — refreshUserMismatchIndicator()
+		// disables it when the queue is empty or a session is running, and
+		// re-enables it otherwise.
+		clearQueueBtn.style.cssText = 'font-weight:600; padding:4px 10px; display:inline-block;';
+		clearQueueBtn.disabled = true;
+		clearQueueBtn.textContent = '🗑 Clear Queue';
+
 		const toast = document.createElement('span');
 		toast.className = 'dgca-toast-msg';
 		if (!idSuffix) toast.id = 'dgca-toast-msg';
@@ -352,10 +428,67 @@ DGCA-side filler content script reads from.
 		wrapper.appendChild(sendBtn);
 		wrapper.appendChild(badge);
 		wrapper.appendChild(userWarn);
+		wrapper.appendChild(clearQueueBtn);
 		wrapper.appendChild(toast);
 
 		downloadBtn.parentNode.insertBefore(wrapper, downloadBtn.nextSibling);
 		sendBtn.addEventListener('click', onSendClick);
+		clearQueueBtn.addEventListener('click', clearQueue);
+	}
+
+	// ── Shimmer (visual highlight) ───────────────────────────────────────
+	// Shared sweeping-highlight treatment applied to both our own "Add to
+	// DGCA Queue" button and the portal's native "Generate Preview" button,
+	// so the two calls-to-action in the row-selection workflow both draw
+	// the eye. Same keyframe shape/duration as the Start-button shimmer in
+	// dgca-filler.js's toolbar, duplicated here (rather than shared via
+	// shared.js) since it's pure CSS with no logic to reuse and this page
+	// never loads that toolbar's stylesheet.
+	function injectShimmerStyle() {
+		if (document.getElementById('dgca-ext-shimmer-style')) return;
+		const style = document.createElement('style');
+		style.id = 'dgca-ext-shimmer-style';
+		style.textContent = `
+			.dgca-ext-shimmer-btn {
+				position: relative;
+				overflow: hidden;
+			}
+			/* Only sweeps while the button is actually clickable, so a
+			   disabled button doesn't shimmer as if it were live. */
+			.dgca-ext-shimmer-btn:not(:disabled)::after {
+				content: '';
+				position: absolute;
+				top: 0;
+				left: 0;
+				height: 100%;
+				width: 50%;
+				background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.65) 50%, rgba(255, 255, 255, 0) 100%);
+				animation: dgca-ext-shimmer-bar 3.2s ease-in-out infinite;
+				pointer-events: none;
+			}
+			@keyframes dgca-ext-shimmer-bar {
+				0% { transform: translateX(-100%); }
+				100% { transform: translateX(350%); }
+			}
+		`;
+		document.head.appendChild(style);
+	}
+
+	// Finds the portal's native "Generate Preview" submit button so it can
+	// be tagged with the shared shimmer class. Matched by visible text
+	// rather than a fixed ID/selector, same reasoning as
+	// findDownloadCsvButtons() above — it's the portal's own markup, not
+	// ours, and IDs there aren't guaranteed stable.
+	function findGeneratePreviewButton() {
+		const candidates = Array.from(document.querySelectorAll('button[type="submit"], button.btn-min'));
+		return candidates.find(el => el.textContent.trim().toLowerCase().includes('generate preview')) || null;
+	}
+
+	function ensurePreviewButtonShimmer() {
+		const btn = findGeneratePreviewButton();
+		if (btn && !btn.classList.contains('dgca-ext-shimmer-btn')) {
+			btn.classList.add('dgca-ext-shimmer-btn');
+		}
 	}
 
 	function ensureButtonInjected() {
@@ -376,8 +509,7 @@ DGCA-side filler content script reads from.
 			if (firstBtn) btnContainer.insertBefore(fallbackWrap, firstBtn);
 			else btnContainer.prepend(fallbackWrap);
 
-			// Reuse injectButtonInstance by inserting a zero-size anchor node
-			// right before fallbackWrap's position, then let it insert after.
+			// Reuse injectButtonInstance via a throwaway anchor node.
 			const anchor = document.createElement('span');
 			fallbackWrap.appendChild(anchor);
 			injectButtonInstance(anchor, '');
@@ -388,7 +520,7 @@ DGCA-side filler content script reads from.
 		refreshUserMismatchIndicator();
 
 		window.DGCA_STORAGE.onChanged((changes, area) => {
-			if (area === 'session' && (changes.dgca_pending_rows || changes.dgca_queue_user)) {
+			if (area === 'session' && (changes.dgca_pending_rows || changes.dgca_queue_user || changes.dgca_session_running)) {
 				refreshUserMismatchIndicator();
 			}
 		});
@@ -437,14 +569,14 @@ DGCA-side filler content script reads from.
 			}
 		}
 
+	if (!table._dgcaListenerAttached) {
 		table._dgcaListenerAttached = true;
 		table.addEventListener('change', (e) => {
 			if (!e.target.classList.contains('dgca-row-chk')) return;
 			const tr = e.target.closest('tr');
 			if (!tr || !isDataRow(tr)) return;
 
-			// _offset is already 1 because the checkbox cell is present in the DOM
-			const row = parseRow(tr);
+			const row = parseRow(tr); // _offset is already 1
 			if (!row) return;
 
 			if (e.target.checked) _selectedRows[row.id] = row;
@@ -452,17 +584,15 @@ DGCA-side filler content script reads from.
 
 			updateSelectionBadge();
 
-			if (chkAll) {
+			const chkAllEl = document.getElementById('dgca-chk-all');
+			if (chkAllEl) {
 				const all = table.querySelectorAll('.dgca-row-chk');
 				const checked = table.querySelectorAll('.dgca-row-chk:checked');
-				chkAll.checked = checked.length === all.length;
-				chkAll.indeterminate = checked.length > 0 && checked.length < all.length;
+				chkAllEl.checked = checked.length === all.length;
+				chkAllEl.indeterminate = checked.length > 0 && checked.length < all.length;
 			}
 		});
 	}
-
-	function escAttr(str) {
-		return String(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 	}
 
 	function parseRowFromCheckbox(chk) {
@@ -476,42 +606,7 @@ DGCA-side filler content script reads from.
 		document.querySelectorAll('.dgca-sel-count').forEach(badge => { badge.textContent = text; });
 	}
 
-	function rowSortKey(row) {
-		// date is normalised to DD-MM-YYYY by parseRow
-		const [d, m, y] = String(row.date || '').split('-');
-		const dateKey = `${y || '0000'}${m || '00'}${d || '00'}`;
-		const timeKey = String(row.timeFrom || '00:00').replace(':', '');
-		return `${dateKey}${timeKey}`;
-	}
-
-	function sortQueue(rows, statuses, errors) {
-		const indexed = rows.map((row, i) => ({
-			row,
-			status: statuses[i] || 'pending',
-			error: errors[i] || null,
-			key: rowSortKey(row),
-		}));
-
-		indexed.sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
-
-		const sortedRows = indexed.map(x => x.row);
-		const sortedStatuses = indexed.map(x => x.status);
-		const sortedErrors = {};
-		indexed.forEach((x, i) => { if (x.error) sortedErrors[i] = x.error; });
-
-		return { rows: sortedRows, statuses: sortedStatuses, errors: sortedErrors };
-	}
-
 	function onSendClick() {
-		// On Chrome, this can successfully auto-open the side panel because
-		// Chrome preserves user-gesture context across the runtime.sendMessage
-		// hop. Firefox does not, so sidebarAction.open() would just silently
-		// fail there — skip the attempt and rely on the toast nudge below
-		// instead of a call we know can't succeed.
-		if (!isFirefox()) {
-			try { chrome.runtime.sendMessage({ type: 'OPEN_SIDE_PANEL' }); } catch (_) { }
-		}
-
 		const newRows = Object.values(_selectedRows);
 		if (newRows.length === 0) {
 			alert('No rows selected. Please check at least one row.');
@@ -520,12 +615,18 @@ DGCA-side filler content script reads from.
 
 		const currentUser = getAaiUser();
 
-		window.DGCA_STORAGE.get(['dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors', 'dgca_queue_user'])
+		window.DGCA_STORAGE.get(['dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors', 'dgca_queue_user', 'dgca_session_running'])
 			.then((data) => {
 				const existing = data?.dgca_pending_rows || [];
 				const existingStatus = data?.dgca_row_status || [];
 				const existingErrors = data?.dgca_row_errors || {};
 				const queueUser = data?.dgca_queue_user || null;
+
+				if (data?.dgca_session_running) {
+					refreshUserMismatchIndicator();
+					alert('A fill session is currently running on the DGCA tab. Please wait for it to finish or abort it there before adding more rows.');
+					return;
+				}
 
 				if (isUserMismatch(currentUser, queueUser, existing.length)) {
 					refreshUserMismatchIndicator();
@@ -555,8 +656,11 @@ DGCA-side filler content script reads from.
 					dgca_session_ts: Date.now(),
 					dgca_queue_user: nextQueueUser,
 				}).then(() => {
-					chrome.runtime.sendMessage({ type: 'ROWS_QUEUED', count: merged.length, user: nextQueueUser });
-
+					// The write above already fires storage.onChanged, which the
+					// background script relays to the DGCA tab's toolbar (see
+					// service-worker.js); the popup, a trusted extension context,
+					// listens to chrome.storage.onChanged directly whenever it's
+					// open. No separate broadcast is needed here.
 					const successText = `✓ ${toAdd.length} added (${merged.length} total)`;
 					document.querySelectorAll('.dgca-send-btn').forEach(btn => {
 						const orig = btn.textContent;
@@ -565,16 +669,17 @@ DGCA-side filler content script reads from.
 						setTimeout(() => { btn.textContent = orig; btn.style.background = ''; }, 3000);
 					});
 
-					if (isFirefox()) {
-						document.querySelectorAll('.dgca-toast-msg').forEach(toast => {
-							toast.textContent = '👉 Click the extension icon in your toolbar to open the panel';
-							toast.style.display = 'inline-block';
-							setTimeout(() => { toast.style.display = 'none'; }, 6000);
-						});
-					}
+					document.querySelectorAll('.dgca-toast-msg').forEach(toast => {
+						toast.textContent = 'Data imported, Open DGCA Entry Page to Fill the Entries.';
+						toast.style.display = 'inline-block';
+						setTimeout(() => { toast.style.display = 'none'; }, 6000);
+					});
 
 					updateSelectionBadge();
-					refreshUserMismatchIndicator();
+					// refreshUserMismatchIndicator() is intentionally not called
+					// here — the dgca_pending_rows/dgca_queue_user write above
+					// already fires the window.DGCA_STORAGE.onChanged listener
+					// registered in ensureButtonInjected(), which calls it.
 				});
 			})
 			.catch((err) => {
@@ -584,9 +689,13 @@ DGCA-side filler content script reads from.
 	}
 
 	function setup() {
+		injectShimmerStyle();
+		ensurePreviewButtonShimmer();
+
 		const table = document.querySelector('table');
 		if (!table) {
 			const obs = new MutationObserver((_, o) => {
+				ensurePreviewButtonShimmer();
 				const tb = document.querySelector('table');
 				if (tb) { o.disconnect(); setup(); }
 			});

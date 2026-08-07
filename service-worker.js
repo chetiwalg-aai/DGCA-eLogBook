@@ -1,54 +1,42 @@
-// ── Cross-browser panel abstraction ───────────────────────────────────────────
-// Chrome: chrome.sidePanel (per-tab, needs an explicit open({tabId}) call).
-// Firefox: chrome.sidebarAction / browser.sidebarAction (per-window, no tabId,
-// and has no setAccessLevel-style restriction on storage.session — content
-// scripts there already have full read/write access by default).
-const IS_FIREFOX = typeof chrome.sidePanel === 'undefined' && typeof chrome.sidebarAction !== 'undefined';
+// Background service worker.
+//
+// Responsibilities:
+//   1. Storage bridge — content scripts (dgca-filler.js on the DGCA portal,
+//      injector-egcaexport.js on the EGCA-export page) go through
+//      window.DGCA_STORAGE, which relays get/set/remove here via
+//      chrome.runtime messages and gets live-update notifications relayed
+//      back out via chrome.tabs.sendMessage. Extension pages (the popup)
+//      read/write chrome.storage.session directly and don't need this
+//      relay — they're already a trusted extension context.
+//   2. Toolbar-icon badge — mirrors queue size/status.
+//   3. Update check — GitHub-release polling on Chrome, native update flow
+//      on Firefox.
+//
+// There is no message routing between different UI surfaces here (e.g. no
+// popup-to-content-script relay for starting/aborting a fill): the queue
+// and the fill session both live entirely inside dgca-filler.js's in-page
+// toolbar, so those are local calls within that one content script.
 
-function openPanel(tabId) {
-	if (chrome.sidePanel && typeof chrome.sidePanel.open === 'function') {
-		// Chrome: must be called synchronously within a user-gesture-carrying
-		// listener (onClicked, or the onMessage handler below), with a tabId.
-		return chrome.sidePanel.open({ tabId }).catch((err) => {
-			console.warn('[DGCA SW] Could not open side panel (Chrome):', err);
-		});
-	}
-	if (chrome.sidebarAction && typeof chrome.sidebarAction.open === 'function') {
-		// Firefox: no tabId — sidebarAction is per-window, not per-tab.
-		try {
-			return Promise.resolve(chrome.sidebarAction.open());
-		} catch (err) {
-			console.warn('[DGCA SW] Could not open sidebar (Firefox):', err);
-			return Promise.resolve();
-		}
-	}
-	return Promise.resolve();
-}
+// Used only by the update-check logic below, which differs between the two
+// browsers (Chrome has no store listing here, so it self-checks GitHub;
+// Firefox uses its own built-in update flow).
+const IS_FIREFOX = typeof navigator !== 'undefined' && /firefox/i.test(navigator.userAgent || '');
 
-// NOTE: content scripts do NOT get direct access to chrome.storage.session on
-// either browser — Chrome blocks it unless setAccessLevel is called, and
-// Firefox has no such escape hatch at all. Rather than rely on that, content
-// scripts go through storage-bridge.js, which relays get/set/remove calls to
-// this background script (see the DGCA_STORAGE_* handlers below).
-
-// ── Open side panel / sidebar when extension icon is clicked ─────────────────
-chrome.action.onClicked.addListener((tab) => {
-	openPanel(tab.id);
-});
-
-// ── Storage bridge for content scripts ────────────────────────────────────────
-// Content scripts can't reliably use chrome.storage.session directly on
-// either browser (see storage-bridge.js). The background script is a
-// trusted context on both, so it does the actual reads/writes and relays
-// storage.onChanged out to any listening content scripts.
+// ── Storage bridge for content scripts ────────────────────────────────────
 chrome.storage.onChanged.addListener((changes, area) => {
 	if (area !== 'session') return;
-	chrome.runtime.sendMessage({ type: 'DGCA_STORAGE_CHANGED', changes, area }).catch(() => { });
+	// Both the DGCA portal (toolbar's own queue view) and the EGCA-export
+	// page (queue-mismatch banner, Clear Queue / Add to Queue button state)
+	// need to react live to storage changes made from the other tab or from
+	// the popup.
+	chrome.tabs.query({ url: ['https://www.dgca.gov.in/*', 'https://iamatc.aai.aero/*'] }).then((tabs) => {
+		for (const tab of tabs) {
+			chrome.tabs.sendMessage(tab.id, { type: 'DGCA_STORAGE_CHANGED', changes, area }).catch(() => { });
+		}
+	}).catch(() => { });
 });
 
-// ── Message router ────────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-
 	if (msg.type === 'DGCA_STORAGE_GET') {
 		chrome.storage.session.get(msg.keys)
 			.then((value) => sendResponse({ ok: true, value }))
@@ -69,107 +57,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 			.catch((err) => sendResponse({ ok: false, error: err.message }));
 		return true; // async
 	}
-
-
-	// Content script asking to open the side panel (e.g. "Add to Queue" click
-	// on the AAI page) — must be called synchronously here, off the incoming
-	// user-gesture-carrying message, or Chrome will reject it.
-	if (msg.type === 'OPEN_SIDE_PANEL') {
-		// Must be triggered synchronously here, off the incoming message that
-		// itself came from a user-gesture click on the AAI page — both Chrome's
-		// sidePanel.open and Firefox's sidebarAction.open require this.
-		const tabId = sender?.tab?.id;
-		openPanel(tabId);
-		sendResponse({ ok: true });
-		return;
-	}
-
-	// Source page queued rows → notify side panel if open
-	if (msg.type === 'ROWS_QUEUED') {
-		chrome.runtime.sendMessage({ type: 'ROWS_READY', count: msg.count })
-			.catch(() => { });
-		sendResponse({ ok: true });
-		return;
-	}
-
-	// Side panel wants to start filling → find DGCA tab and relay rows.
-	// Only the EGCA-export source/filler exists today, so no routing needed.
-	if (msg.type === 'REQUEST_START_FILLING') {
-		chrome.storage.session.get(['dgca_pending_rows'])
-			.then(async (data) => {
-				const rows = data?.dgca_pending_rows || [];
-				if (rows.length === 0) {
-					sendResponse({ ok: false, error: 'No rows queued.' });
-					return;
-				}
-				const dgcaTab = await findDgcaTab();
-				if (!dgcaTab) {
-					sendResponse({ ok: false, error: 'DGCA portal tab not found. Please open it.' });
-					return;
-				}
-
-				chrome.tabs.sendMessage(dgcaTab.id, { type: 'PING' }, (pingResp) => {
-					if (chrome.runtime.lastError || !pingResp?.breadcrumbOk) {
-						sendResponse({ ok: false, error: 'DGCA tab is not on the e-Log Book page (breadcrumb check failed). Please navigate there and try again.' });
-						return;
-					}
-
-					chrome.tabs.sendMessage(dgcaTab.id, { type: 'START_FILLING', rows }, (resp) => {
-						if (chrome.runtime.lastError) {
-							sendResponse({ ok: false, error: 'Could not reach DGCA tab. Make sure you are on the entry page.' });
-						} else {
-							sendResponse(resp);
-						}
-					});
-				});
-			})
-			.catch((err) => {
-				sendResponse({ ok: false, error: `Storage error: ${err.message}` });
-			});
-		return true; // async
-	}
-
-	// Side panel wants to abort
-	if (msg.type === 'REQUEST_ABORT') {
-		findDgcaTab().then(tab => {
-			if (tab) chrome.tabs.sendMessage(tab.id, { type: 'ABORT_SESSION' });
-		});
-		sendResponse({ ok: true });
-		return;
-	}
-
-	// DGCA filler sending progress → forward to side panel
-	if (msg.type === 'FILL_PROGRESS') {
-		chrome.runtime.sendMessage(msg).catch(() => { });
-		sendResponse({ ok: true });
-		return;
-	}
-
-	// Side panel pinging DGCA tab to check readiness
-	if (msg.type === 'PING_DGCA_TAB') {
-		findDgcaTab().then(tab => {
-			if (!tab) {
-				sendResponse({ ok: false, error: 'No DGCA tab found.' });
-				return;
-			}
-			chrome.tabs.sendMessage(tab.id, { type: 'PING' }, (resp) => {
-				if (chrome.runtime.lastError) {
-					sendResponse({ ok: false, error: 'DGCA content script not responding.' });
-				} else {
-					sendResponse({ ok: true, url: resp?.url, onEntryPage: !!resp?.onEntryPage, breadcrumbOk: !!resp?.breadcrumbOk });
-				}
-			});
-		});
-		return true;
-	}
 });
 
-// ── Extension icon badge: queue count, color-coded by status ─────────────────
-// Colors mirror the side panel's badge states (panel.css .badge--*):
-//   queued (rows waiting, nothing running/erroring yet) → red   (draws the eye)
-//   running (a row currently 'filling')                → blue
-//   error (at least one row 'error', nothing running)   → red
-//   done (every row 'submitted')                        → green
+// ── Extension icon badge: queue count, color-coded by status ─────────────
+// Colors mirror the toolbar's own pill states:
+//   queued  (rows waiting, nothing running/erroring yet) → red   (draws the eye)
+//   running (a row currently 'filling')                  → blue
+//   error   (at least one row 'error', nothing running)  → red
+//   done    (every row 'submitted')                       → green
 const BADGE_COLOR = {
 	queued: '#e53935', // red
 	running: '#2196f3', // blue
@@ -201,7 +96,7 @@ async function refreshBadge() {
 		await chrome.action.setBadgeText({ text });
 		if (color) {
 			await chrome.action.setBadgeBackgroundColor({ color });
-			// setBadgeTextColor is only available on newer Chrome — feature-detect.
+			// Only available on newer Chrome — feature-detect before calling.
 			if (typeof chrome.action.setBadgeTextColor === 'function') {
 				await chrome.action.setBadgeTextColor({ color: '#ffffff' }).catch(() => { });
 			}
@@ -211,42 +106,31 @@ async function refreshBadge() {
 	}
 }
 
-// Recompute whenever the queue or row statuses change (covers session start,
-// per-row progress, abort, clear, and clear-done — all of which write to
-// these same storage keys).
+// Recompute whenever the queue or row statuses change — covers session
+// start, per-row progress, abort, clear, and clear-done, since all of those
+// write to one of these two keys.
 chrome.storage.onChanged.addListener((changes, area) => {
 	if (area !== 'session') return;
 	if (changes.dgca_pending_rows || changes.dgca_row_status) refreshBadge();
 });
 
-// Recompute on service-worker startup / extension install so the badge is
-// correct even if it was reloaded mid-session.
+// Recompute on service-worker startup/install so the badge is correct even
+// if the worker was reloaded mid-session.
 chrome.runtime.onStartup?.addListener(refreshBadge);
 chrome.runtime.onInstalled?.addListener(refreshBadge);
 refreshBadge();
 
-// ── Find the DGCA portal tab ──────────────────────────────────────────────────
-async function findDgcaTab() {
-	const tabs = await chrome.tabs.query({ url: 'https://www.dgca.gov.in/*' });
-	return tabs.length > 0 ? tabs[tabs.length - 1] : null;
-}
-
-// ── Update check (browser-dependent) ──────────────────────────────────────────
-// Firefox: the extension is distributed with a standard update_url (AMO or a
-// self-hosted update manifest), so we can just ask the browser to do its own
-// update check via requestUpdateCheck — no need to hit GitHub ourselves.
-//
-// Chrome: this build isn't on the Web Store, so there's no update_url and
-// requestUpdateCheck is a no-op there. Instead we compare our own
-// manifest.json version against the latest tagged release on GitHub, and
-// store the result so the side panel can show an "Update" button linking to
-// the repo (see panel.js / GITHUB_RELEASES_URL).
+// ── Update check (browser-dependent) ──────────────────────────────────────
+// Firefox has a standard update_url, so requestUpdateCheck handles it end to
+// end. Chrome isn't on the Web Store, so this diffs the installed manifest
+// version against the latest GitHub release tag and stores the result for
+// popup.js to show an Update button.
 const GITHUB_REPO = 'chetiwalg-aai/DGCA-eLogBook';
 const GITHUB_RELEASES_URL = `https://github.com/${GITHUB_REPO}/releases/latest`;
 
+// Returns > 0 if a > b, < 0 if a < b, 0 if equal. Handles "v" prefixes and
+// differing segment counts (e.g. "1.2" vs "1.2.0").
 function compareVersions(a, b) {
-	// Returns > 0 if a > b, < 0 if a < b, 0 if equal. Handles "v" prefixes and
-	// differing segment counts (e.g. "1.2" vs "1.2.0").
 	const clean = (v) => String(v).trim().replace(/^v/i, '').split(/[.-]/).map(Number);
 	const pa = clean(a), pb = clean(b);
 	const len = Math.max(pa.length, pb.length);
@@ -281,8 +165,8 @@ function checkForUpdatesFirefox() {
 	try {
 		chrome.runtime.requestUpdateCheck((status, details) => {
 			console.log('[DGCA SW] Firefox update check:', status, details);
-			// Firefox handles the actual download/install itself; nothing for
-			// the panel to show a button for, so no storage write here.
+			// Firefox handles the actual download/install itself, so there's
+			// nothing to show a popup button for — no storage write here.
 		});
 	} catch (err) {
 		console.warn('[DGCA SW] requestUpdateCheck failed:', err);
