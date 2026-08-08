@@ -246,6 +246,18 @@ value maps needed.
 		await sleep(100);
 	}
 
+	async function typeIntoFieldAndVerify(selector, text, attempts = 4, settleMs = 250) {
+		const expected = String(text);
+		for (let i = 0; i < attempts; i++) {
+			await typeIntoField(selector, expected);
+			await sleep(settleMs);
+			const el = document.querySelector(selector);
+			if (el && el.value === expected) return el;
+			console.warn(`[DGCA Filler] ${selector} reverted after write (attempt ${i + 1}/${attempts}): got "${el ? el.value : null}", expected "${expected}" — retrying`);
+		}
+		throw new Error(`${selector}: value would not stick to "${expected}" after ${attempts} attempts`);
+	}
+
 	async function typeIntoField(selector, text) {
 		const el = await waitForSelector(selector);
 		el.value = '';
@@ -532,9 +544,9 @@ value maps needed.
 				await typeIntoField(SEL.traineeAtcol, raw.traineeLicense);
 				const instructorField = await waitForFieldValue('#nameOfInstructor');
 				if (raw.traineeLicenType === "SATCOL" && raw.traineeName) {
-					await typeIntoField('#nameOfInstructor', raw.traineeName.toUpperCase());
+					await typeIntoFieldAndVerify('#nameOfInstructor', raw.traineeName.toUpperCase());
 				} else if (raw.traineeName && !namesMatch(instructorField.value, raw.traineeName)) {
-					await typeIntoField('#nameOfInstructor', raw.traineeName.toUpperCase());
+					await typeIntoFieldAndVerify('#nameOfInstructor', raw.traineeName.toUpperCase());
 				}
 			}
 
@@ -561,9 +573,9 @@ value maps needed.
 				await typeIntoField(SEL.traineeAtcol, raw.traineeLicense);
 				const instructorField = await waitForFieldValue('#nameOfInstructor');
 				if (raw.traineeLicenType === "SATCOL" && raw.traineeName) {
-					await typeIntoField('#nameOfInstructor', raw.traineeName.toUpperCase());
+					await typeIntoFieldAndVerify('#nameOfInstructor', raw.traineeName.toUpperCase());
 				} else if (raw.traineeName && !namesMatch(instructorField.value, raw.traineeName)) {
-					await typeIntoField('#nameOfInstructor', raw.traineeName.toUpperCase());
+					await typeIntoFieldAndVerify('#nameOfInstructor', raw.traineeName.toUpperCase());
 				}
 			}
 
@@ -1775,7 +1787,7 @@ value maps needed.
 		const allHaveAtsId = total > 0 && rows.every(r => !!((r.egcaRaw || {}).atsEgcaId));
 		if (allHaveAtsId) {
 			wsoRow.style.display = 'none';
-			atsIdValue.textContent = rows[0].egcaRaw.atsEgcaId;
+			atsIdValue.textContent = "Imported from IAMATC";
 			atsIdInfo.style.display = 'flex';
 		} else {
 			wsoRow.style.display = 'flex';
