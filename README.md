@@ -1,6 +1,6 @@
 ## Video Guide
 
-https://youtu.be/qVMiYGiWJ-E
+https://youtu.be/xppOqtbQIps
 
 ## Browser Support
 
