@@ -688,6 +688,36 @@
 			});
 	}
 
+	// Shows a fixed banner telling the user this page is stripping our
+	// injected elements back out (e.g. a MutationObserver on the page that
+	// removes any newly-added node). This only reports the situation — it
+	// never retries injection or tries to work around whatever is removing
+	// the nodes.
+	function showBlockedNotice() {
+		if (document.getElementById('dgca-blocked-notice')) return;
+		const notice = document.createElement('div');
+		notice.id = 'dgca-blocked-notice';
+		notice.style.cssText = 'position:fixed; top:12px; right:12px; z-index:999999; max-width:360px; background:#fff3cd; color:#664d03; border:1px solid #ffe69c; border-radius:6px; padding:10px 14px; font-size:13px; font-family:sans-serif; box-shadow:0 2px 8px rgba(0,0,0,.15);';
+		notice.style.position = 'fixed';
+		notice.innerHTML = `<span id="dgca-blocked-notice-close" style="position:absolute; top:6px; right:8px; cursor:pointer; font-weight:bold; line-height:1;">&times;</span><strong>⚠ DGCA Injector Blocked</strong><br>The DGCA Injector detected that this site removed its checkbox and "Add to DGCA Queue" elements immediately after they were inserted. This behavior indicates the site is actively blocking or interfering with the extension's functionality, rather than an issue with the extension itself. If you continue to experience this, we recommend installing the official IAMATC Extension, which may not be subject to the same restrictions. Thank you for your understanding.`;
+		document.body.appendChild(notice);
+		const closeBtn = document.getElementById('dgca-blocked-notice-close');
+		if (closeBtn) closeBtn.addEventListener('click', () => notice.remove());
+	}
+
+	// Checks, a short beat after setup() runs, whether our injected elements
+	// are still present. Something on the page (e.g. a MutationObserver)
+	// can insert them into the DOM and then remove them within the same
+	// tick/microtask, so this check runs on the next macrotask rather than
+	// immediately after injection.
+	function checkInjectionSurvived() {
+		setTimeout(() => {
+			const headerOk = !!document.querySelector('.dgca-chk-header');
+			const buttonOk = !!document.querySelector('.dgca-inline-btn-wrapper');
+			if (!headerOk || !buttonOk) showBlockedNotice();
+		}, 500);
+	}
+
 	function setup() {
 		injectShimmerStyle();
 		ensurePreviewButtonShimmer();
@@ -706,6 +736,7 @@
 		ensureHeaderInjected();
 		ensureButtonInjected();
 		injectCheckboxesIntoTable(table);
+		checkInjectionSurvived();
 	}
 
 	if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setup);

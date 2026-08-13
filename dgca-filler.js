@@ -600,6 +600,10 @@ value maps needed.
 		}
 		// Any other/unrecognised type of duty: no extra fields required.
 
+		if (raw.remarks) {
+			await typeIntoField(SEL.remarksField, raw.remarks);
+		}
+
 		await typeIntoField(SEL.startTime, timeFrom);
 		await typeIntoField(SEL.endTime, timeTo);
 		await waitForFieldValue('#totalDuration');
