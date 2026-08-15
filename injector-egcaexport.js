@@ -4,88 +4,39 @@
 (function () {
 	'use strict';
 
-	// Columns are looked up by header text, not fixed index, since column
-	// order in this table has changed before.
-	const EGCA_COL_NAMES = [
-		'FROM_DATE', 'TO_DATE', 'POSTING_STATION', 'ICAO_CODE',
-		'ATS_EGCA_ID', 'RATING', 'ATS_UNIT', 'BRIEFING_DONE',
-		'TYPE_OF_DUTY', 'START_TIME', 'END_TIME', 'TOTAL_DURATION',
-		'REMARKS', 'KNOWLEDGE_CHECK', 'SKILL_TEST_CHECK', 'OJT_PROVIDED_CHECK',
-		'OJT_ENV', 'TRAINEE_LICENSE', 'TRAINEE_LICEN_TYPE', 'TRAINEE_NAME',
-		'INSTRUCTOR_LICENSE', 'INSTRUCTOR_NAME', 'PROFICIENCY_CHECK', 'NEWLY_ESTAB_STATION',
-	];
-
-	// Positional fallback, used only when the header row can't be read by
-	// name (see buildHeaderMap). Index 0 is intentionally unused/reserved so
-	// FROM_DATE lines up with column 1 in the underlying table; kept in
-	// sync with EGCA_COL_NAMES above.
-	const EGCA_COL_FALLBACK = {
-		FROM_DATE: 1, TO_DATE: 2, POSTING_STATION: 3, ICAO_CODE: 4,
-		ATS_EGCA_ID: 5, RATING: 6, ATS_UNIT: 7, BRIEFING_DONE: 8,
-		TYPE_OF_DUTY: 9, START_TIME: 10, END_TIME: 11, TOTAL_DURATION: 12,
-		REMARKS: 13, KNOWLEDGE_CHECK: 14, SKILL_TEST_CHECK: 15, OJT_PROVIDED_CHECK: 16,
-		OJT_ENV: 17, TRAINEE_LICENSE: 18, TRAINEE_LICEN_TYPE: 19, TRAINEE_NAME: 20,
-		INSTRUCTOR_LICENSE: 21, INSTRUCTOR_NAME: 22, PROFICIENCY_CHECK: 23, NEWLY_ESTAB_STATION: 24
-	};
-
 	// sortQueue/escAttr live in shared.js (window.DGCA) so this file and the
 	// DGCA-side toolbar (dgca-filler.js) share one implementation of queue
 	// sorting/escaping instead of two copies that could drift apart.
 	const { sortQueue, escAttr } = window.DGCA;
 
-	let _offset = 0;
 	let _selectedRows = {};
-	let _headerMap = null; // EGCA_COL_NAMES entry -> column index in the *original* table (before our injected checkbox column)
-	let _usingFallbackMap = false; // true once buildHeaderMap() has failed to read the header row at least once
 
 	function _normHeader(s) {
 		return String(s || '').replace(/\s+/g, ' ').trim().toUpperCase();
 	}
 
-	// Scans the table's header row and builds a name -> column-index map.
-	// Ignores our own injected checkbox <th> so indices line up with the
-	// original (unmodified) table markup — matching how _offset is used
-	// elsewhere (0 before the checkbox column is injected, 1 after).
-	function buildHeaderMap(table) {
+	// Reads the table's own header row, in document order, ignoring our own
+	// injected checkbox <th> so the returned list lines up 1:1 with the
+	// data <td>s readRowByHeaders() below pulls out of each row. Read fresh
+	// each call rather than cached — it's just a handful of <th> lookups, so
+	// there's no real cost, and it means a header rename/reorder/addition on
+	// the page is picked up immediately with zero changes needed here.
+	//
+	// No fixed column-name list is kept in this file at all: whatever
+	// headers the table has, that's what gets read and queued (see
+	// readRowByHeaders()/parseRow() below, which spread every column through
+	// unchanged). If the portal adds/renames/removes a column, this file
+	// doesn't need touching — only dgca-filler.js, which is the one place
+	// that actually knows what each named field means and does anything
+	// with it (raw['HEADER_NAME']).
+	function getTableHeaders(table) {
 		const thead = table.querySelector('thead');
-		if (!thead) return null;
-		const headerRows = thead.querySelectorAll('tr');
-		if (!headerRows[0]) return null;
-
-		const ths = Array.from(headerRows[0].querySelectorAll('th'))
-			.filter(th => !th.classList.contains('dgca-chk-header'));
-
-		const map = {};
-		ths.forEach((th, idx) => {
-			const name = _normHeader(th.textContent);
-			if (name) map[name] = idx;
-		});
-
-		const missing = EGCA_COL_NAMES.filter(n => !(n in map));
-		if (missing.length > 0) {
-			console.warn('[DGCA Injector] Header columns not found by name, falling back to positional map for:', missing);
-		}
-		return map;
-	}
-
-	function ensureHeaderMap(table) {
-		const map = buildHeaderMap(table);
-		if (map) _headerMap = map;
-		else if (!_headerMap) _headerMap = null; // will fall back per-field below
-
-		// Tracks whether any column fell back to positional lookup, since
-		// positional lookup has no guarantee it's reading the right cell if
-		// columns were reordered — drives the stricter validateParsedRow()
-		// checks below.
-		_usingFallbackMap = !_headerMap || EGCA_COL_NAMES.some(n => !(n in _headerMap));
-	}
-
-	// Resolves a logical column name to its cell index for the current row,
-	// preferring the live header map and falling back to the last known-good
-	// static layout if the header row is ever unreadable.
-	function colIndex(name) {
-		if (_headerMap && name in _headerMap) return _headerMap[name];
-		return EGCA_COL_FALLBACK[name];
+		if (!thead) return [];
+		const headerRow = thead.querySelector('tr');
+		if (!headerRow) return [];
+		return Array.from(headerRow.querySelectorAll('th'))
+			.filter(th => !th.classList.contains('dgca-chk-header'))
+			.map(th => _normHeader(th.textContent));
 	}
 
 	function getAaiUser() {
@@ -187,47 +138,46 @@
 		return (opt.textContent || opt.value).trim();
 	}
 
-	// Reads a cell by logical column name. Handles both plain
-	// contenteditable text cells and the ATS_EGCA_ID cell, which can be
-	// either a <select class="ats-egca-picker"> (pick from known
-	// name+EGCA-ID pairs) or plain free text, depending on the row.
-	function cellText(tr, colName) {
-		const idx = colIndex(colName);
-		if (idx === undefined || idx === null) return '';
-		const td = tr.cells[idx + _offset];
-		if (!td) return '';
-
+	// Reads a single <td>'s value. Handles both plain text cells and the
+	// ATS_EGCA_ID cell, which can be either a <select class="ats-egca-picker">
+	// (pick from known name+EGCA-ID pairs) or plain free text, depending on
+	// the row.
+	//
+	// Uses textContent — NOT innerText. Several columns on this table (e.g.
+	// TOTAL_DURATION) are visually hidden via `.hide-col { display:none
+	// !important }`, kept in the DOM only so the portal's own "Download eGCA
+	// CSV" button can still read them (see downloadEgcaCsv() in the page's
+	// own script, which does the same textContent trick). innerText is
+	// layout-aware and returns '' for anything display:none; textContent
+	// ignores rendering entirely and always returns the cell's real text —
+	// same reasoning as reading a checkbox's containing <td>, which has no
+	// textContent of its own to worry about either way.
+	function readCellValue(td) {
 		const select = td.querySelector('select');
 		if (select) return _selectCellText(select);
+		return td.textContent.trim();
+	}
 
-		return td.innerText.trim();
+	// Reads one data row into a plain object keyed by header text, ignoring
+	// our own injected checkbox <td> so cells line up 1:1 with the headers
+	// array from getTableHeaders() (both filter out the same dgca-chk-*
+	// element). Cells are matched to headers positionally, left to right.
+	function readRowByHeaders(tr, headers) {
+		const cells = Array.from(tr.children).filter(el =>
+			el.tagName === 'TD' && !el.classList.contains('dgca-chk-cell'));
+		const raw = {};
+		headers.forEach((name, i) => {
+			const td = cells[i];
+			raw[name] = td ? readCellValue(td) : '';
+		});
+		return raw;
 	}
 
 	function isDataRow(tr) {
-		const dateText = cellText(tr, 'FROM_DATE');
-		return /^\d{2}\/\d{2}\/\d{4}$/.test(dateText);
-	}
-
-	// Sanity-checks a few distinctly-shaped columns to catch a shifted
-	// positional map before it silently queues misaligned data.
-	function validateParsedRow(row) {
-		const raw = row.egcaRaw;
-		const checks = [
-			[/^\d{2}-\d{2}-\d{4}$/.test(raw.toDate), 'TO_DATE'],       // normaliseEgcaDate() output, DD-MM-YYYY
-			[/^\d{2}:\d{2}$/.test(raw.startTime), 'START_TIME'],
-			[/^\d{2}:\d{2}$/.test(raw.endTime), 'END_TIME'],
-			[/^[A-Z0-9]{3,4}$/.test(row.station), 'ICAO_CODE'],
-		];
-		const failed = checks.filter(([ok]) => !ok).map(([, name]) => name);
-		if (failed.length > 0) {
-			console.warn(
-				'[DGCA Injector] Positional fallback column map produced a row that fails shape validation for:',
-				failed.join(', '),
-				'— skipping this row rather than queuing possibly-misaligned data. Raw row:', raw
-			);
-			return false;
-		}
-		return true;
+		const table = tr.closest('table');
+		if (!table) return false;
+		const raw = readRowByHeaders(tr, getTableHeaders(table));
+		return /^\d{2}\/\d{2}\/\d{4}$/.test(raw['FROM_DATE'] || '');
 	}
 
 	function rowId(date, station, timeFrom, timeTo, dutyType) {
@@ -242,86 +192,29 @@
 		return s;
 	}
 
+	// Flat, keyed by the EGCA table's own header names — row['FROM_DATE'],
+	// row['POSTING_STATION'], row['TYPE_OF_DUTY'], etc. — plus a computed
+	// `id` (for queue dedup/selection) and `date` (normalised, used for
+	// sorting). dgca-filler.js reads the same object back via
+	// raw['HEADER_NAME'] with no translation layer in between.
 	function parseRow(tr) {
-		const getText = (colName) => cellText(tr, colName);
+		const table = tr.closest('table');
+		if (!table) return null;
 
-		const rawFromDate = getText('FROM_DATE');
-		const rawToDate = getText('TO_DATE');
-		const rawPostingStation = getText('POSTING_STATION');
-		const rawIcaoCode = getText('ICAO_CODE');
-		const rawAtsEgcaId = getText('ATS_EGCA_ID');
-		const rawRating = getText('RATING');
-		const rawAtsUnit = getText('ATS_UNIT');
-		const rawBriefingDone = getText('BRIEFING_DONE');
-		const rawTypeOfDuty = getText('TYPE_OF_DUTY');
-		const rawStartTime = getText('START_TIME');
-		const rawEndTime = getText('END_TIME');
-		const rawRemarks = getText('REMARKS');
-		const rawKnowledgeCheck = getText('KNOWLEDGE_CHECK');
-		const rawSkillTestCheck = getText('SKILL_TEST_CHECK');
-		const rawOjtProvidedCheck = getText('OJT_PROVIDED_CHECK');
-		const rawOjtEnv = getText('OJT_ENV');
-		const rawTraineeName = getText('TRAINEE_NAME');
-		const rawTraineeLicense = getText('TRAINEE_LICENSE');
-		const rawTraineeLicenType = getText('TRAINEE_LICEN_TYPE');
-		const rawInstructorName = getText('INSTRUCTOR_NAME');
-		const rawInstructorLicense = getText('INSTRUCTOR_LICENSE');
-		const rawProficiencyCheck = getText('PROFICIENCY_CHECK');
-		const rawNewlyEstab = getText('NEWLY_ESTAB_STATION');
+		const raw = readRowByHeaders(tr, getTableHeaders(table));
+		const rawFromDate = raw['FROM_DATE'] || '';
+		if (!/^\d{2}\/\d{2}\/\d{4}$/.test(rawFromDate)) return null;
 
-		const date = normaliseEgcaDate(rawFromDate);   // DD-MM-YYYY
-		const station = rawIcaoCode.trim().toUpperCase(); // e.g. 'VIJP'
-		const timeFrom = rawStartTime;
-		const timeTo = rawEndTime;
-		const dutyType = rawTypeOfDuty;
-		const atsUnit = rawAtsUnit;
+		const date = normaliseEgcaDate(rawFromDate);
+		const station = (raw['ICAO_CODE'] || '').trim().toUpperCase();
+		const timeFrom = raw['START_TIME'] || '';
+		const timeTo = raw['END_TIME'] || '';
+		const dutyType = raw['TYPE_OF_DUTY'] || '';
 
-		const row = {
-			id: rowId(date, station, timeFrom, timeTo, dutyType),
+		raw['FROM_DATE'] = date; // normalise in place, DD-MM-YYYY
+		if (raw['TO_DATE']) raw['TO_DATE'] = normaliseEgcaDate(raw['TO_DATE']);
 
-			// ── Normalised camelCase schema (consumed by the DGCA toolbar) ──────
-			date,
-			station,
-			timeFrom,
-			timeTo,
-			atsUnit,
-			dutyType,
-			remarks: rawRemarks,
-			postingStationName: rawPostingStation,
-			ratingText: rawRating,
-			nameTrainee: rawTraineeName,
-			instructorAtcol: rawInstructorLicense,
-
-			// ── egcaRaw: full raw data used by dgca-filler.js ────────────────────
-			egcaRaw: {
-				fromDate: normaliseEgcaDate(rawFromDate),
-				toDate: normaliseEgcaDate(rawToDate),
-				postingStation: rawPostingStation,
-				icaoCode: rawIcaoCode,
-				atsEgcaId: rawAtsEgcaId,
-				rating: rawRating,
-				atsUnit: rawAtsUnit,
-				briefingDone: rawBriefingDone,
-				typeOfDuty: rawTypeOfDuty,
-				startTime: rawStartTime,
-				endTime: rawEndTime,
-				remarks: rawRemarks,
-				knowledgeCheck: rawKnowledgeCheck,
-				skillTestCheck: rawSkillTestCheck,
-				ojtProvidedCheck: rawOjtProvidedCheck,
-				ojtEnv: rawOjtEnv,
-				traineeName: rawTraineeName,
-				traineeLicense: rawTraineeLicense,
-				traineeLicenType: rawTraineeLicenType,
-				instructorName: rawInstructorName,
-				instructorLicense: rawInstructorLicense,
-				proficiencyCheck: rawProficiencyCheck,
-				newlyEstabStation: rawNewlyEstab,
-			},
-		};
-
-		if (_usingFallbackMap && !validateParsedRow(row)) return null;
-		return row;
+		return { id: rowId(date, station, timeFrom, timeTo, dutyType), date, ...raw };
 	}
 
 	let _headerInjected = false;
@@ -527,7 +420,6 @@
 	}
 
 	function injectCheckboxesIntoTable(table) {
-		ensureHeaderMap(table);
 		table.querySelectorAll('td.dgca-chk-cell').forEach(td => td.remove());
 		const rows = table.querySelectorAll('tr');
 		const startIndex = rows[0] && rows[0].querySelector('th') ? 1 : 0;
@@ -538,12 +430,14 @@
 			td.className = 'dgca-chk-cell';
 			td.style.cssText = 'text-align:center;vertical-align:middle;border:1px solid #ddd;min-width:36px;';
 
-			const savedOffset = _offset;
-			_offset = 0;
+			// isDataRow()/parseRow() both read headers via getTableHeaders(),
+			// which already ignores our injected checkbox <th>, and read
+			// cells via readRowByHeaders(), which already ignores our
+			// injected checkbox <td> — so this works whether or not the
+			// checkbox column/cells for this row have been injected yet, no
+			// offset bookkeeping needed.
 			const dataRow = isDataRow(tr);
-			let previewRow = null;
-			if (dataRow) previewRow = parseRow(tr);
-			_offset = savedOffset;
+			const previewRow = dataRow ? parseRow(tr) : null;
 
 			if (previewRow) {
 				const isChecked = !!_selectedRows[previewRow.id];
@@ -555,7 +449,6 @@
 			tr.insertBefore(td, tr.firstChild);
 		}
 
-		_offset = 1;
 		updateSelectionBadge();
 
 		const chkAll = document.getElementById('dgca-chk-all');
@@ -576,7 +469,7 @@
 			const tr = e.target.closest('tr');
 			if (!tr || !isDataRow(tr)) return;
 
-			const row = parseRow(tr); // _offset is already 1
+			const row = parseRow(tr);
 			if (!row) return;
 
 			if (e.target.checked) _selectedRows[row.id] = row;
@@ -598,7 +491,7 @@
 	function parseRowFromCheckbox(chk) {
 		const tr = chk.closest('tr');
 		if (!tr || !isDataRow(tr)) return null;
-		return parseRow(tr); // _offset is already 1
+		return parseRow(tr);
 	}
 
 	function updateSelectionBadge() {
@@ -690,16 +583,115 @@
 
 	// Shows a fixed banner telling the user this page is stripping our
 	// injected elements back out (e.g. a MutationObserver on the page that
-	// removes any newly-added node). This only reports the situation — it
-	// never retries injection or tries to work around whatever is removing
-	// the nodes.
+	// removes any newly-added node). This only reports the situation
 	function showBlockedNotice() {
 		if (document.getElementById('dgca-blocked-notice')) return;
+
+		if (!document.getElementById('dgca-blocked-notice-style')) {
+			const style = document.createElement('style');
+			style.id = 'dgca-blocked-notice-style';
+			style.textContent = `
+				#dgca-blocked-notice {
+					position: fixed;
+					top: 16px;
+					right: 16px;
+					z-index: 999999;
+					width: 340px;
+					max-width: calc(100vw - 32px);
+					background: #fffbeb;
+					color: #664d03;
+					border: 1px solid #ffe69c;
+					border-top: 4px solid #f0a500;
+					border-radius: 10px;
+					padding: 16px 16px 14px;
+					font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+					font-size: 13px;
+					line-height: 1.5;
+					box-shadow: 0 8px 24px rgba(0,0,0,.18);
+					animation: dgca-blocked-notice-in .25s ease-out;
+				}
+				@keyframes dgca-blocked-notice-in {
+					from { opacity: 0; transform: translateY(-8px); }
+					to { opacity: 1; transform: translateY(0); }
+				}
+				.dgca-blocked-notice__head {
+					display: flex;
+					align-items: flex-start;
+					gap: 10px;
+					margin-bottom: 8px;
+				}
+				.dgca-blocked-notice__icon {
+					font-size: 20px;
+					line-height: 1;
+					flex-shrink: 0;
+				}
+				.dgca-blocked-notice__title {
+					font-size: 14px;
+					font-weight: 700;
+					color: #92400e;
+					flex: 1;
+				}
+				.dgca-blocked-notice__close {
+					cursor: pointer;
+					font-weight: bold;
+					font-size: 16px;
+					line-height: 1;
+					color: #92400e;
+					opacity: .6;
+					flex-shrink: 0;
+					padding: 2px;
+				}
+				.dgca-blocked-notice__close:hover { opacity: 1; }
+				.dgca-blocked-notice__body { margin: 0 0 12px; }
+				.dgca-blocked-notice__body p { margin: 0 0 6px; }
+				.dgca-blocked-notice__body p:last-child { margin-bottom: 0; }
+				.dgca-blocked-notice__btn {
+					display: flex;
+					align-items: center;
+					justify-content: center;
+					gap: 6px;
+					width: 100%;
+					box-sizing: border-box;
+					background: #f0a500;
+					color: #3a2a00;
+					font-weight: 700;
+					font-size: 13px;
+					text-decoration: none;
+					border-radius: 6px;
+					padding: 9px 12px;
+					transition: background .15s;
+				}
+				.dgca-blocked-notice__btn:hover { background: #d99400; color: #3a2a00; }
+				.dgca-blocked-notice__thanks {
+					margin-top: 10px;
+					font-size: 12px;
+					color: #8a6d1f;
+					text-align: center;
+				}
+			`;
+			document.head.appendChild(style);
+		}
+
 		const notice = document.createElement('div');
 		notice.id = 'dgca-blocked-notice';
-		notice.style.cssText = 'position:fixed; top:12px; right:12px; z-index:999999; max-width:360px; background:#fff3cd; color:#664d03; border:1px solid #ffe69c; border-radius:6px; padding:10px 14px; font-size:13px; font-family:sans-serif; box-shadow:0 2px 8px rgba(0,0,0,.15);';
-		notice.style.position = 'fixed';
-		notice.innerHTML = `<span id="dgca-blocked-notice-close" style="position:absolute; top:6px; right:8px; cursor:pointer; font-weight:bold; line-height:1;">&times;</span><strong>⚠ DGCA Injector Blocked</strong><br>The DGCA Injector detected that this site removed its checkbox and "Add to DGCA Queue" elements immediately after they were inserted. This behavior indicates the site is actively blocking or interfering with the extension's functionality, rather than an issue with the extension itself. If you continue to experience this, we recommend installing the official IAMATC Extension, which may not be subject to the same restrictions. Thank you for your understanding.`;
+		notice.innerHTML = `
+			<div class="dgca-blocked-notice__head">
+				<span class="dgca-blocked-notice__icon">⚠️</span>
+				<span class="dgca-blocked-notice__title">DGCA eLogBook Automator Extension blocked</span>
+				<span id="dgca-blocked-notice-close" class="dgca-blocked-notice__close">&times;</span>
+			</div>
+			<div class="dgca-blocked-notice__body">
+				<p>Due to recent changes in site, the extension is no longer functional.</p>
+				<p>If this issue persists, uninstall this extension and use the official extension instead:</p>
+			</div>
+			<a class="dgca-blocked-notice__btn" href="https://chromewebstore.google.com/detail/egca-atc-logbook-autofill/fdhkbilacfkbfgghadoeefcblipnlhgd" target="_blank" rel="noopener noreferrer">
+				🔗 Get Official Extension
+			</a>
+			<div class="dgca-blocked-notice__body" style="margin-top:10px;">
+				<p>For support with the new extension, contact the IAMATC Site.</p>
+			</div>
+			<div class="dgca-blocked-notice__thanks">Thank you for your support and understanding ❤️</div>
+		`;
 		document.body.appendChild(notice);
 		const closeBtn = document.getElementById('dgca-blocked-notice-close');
 		if (closeBtn) closeBtn.addEventListener('click', () => notice.remove());

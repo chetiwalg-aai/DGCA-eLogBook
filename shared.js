@@ -70,10 +70,16 @@ gone).
 	// (when merging newly-selected rows into the existing queue) and
 	// dgca-filler.js's toolbar (when loading the queue from storage). Keeps
 	// statuses/errors aligned to rows after reordering.
+	//
+	// Rows are now flat, keyed by the EGCA table's own header names
+	// (row['START_TIME'], etc.) rather than a camelCase-normalised
+	// row.timeFrom — row.timeFrom is read as a fallback only, for any row
+	// still in storage from before that change (e.g. a queue built by an
+	// older version of the extension that hasn't been cleared yet).
 	function rowSortKey(row) {
 		const [d, m, y] = String(row.date || '').split('-');
 		const dateKey = `${y || '0000'}${m || '00'}${d || '00'}`;
-		const timeKey = String(row.timeFrom || '00:00').replace(':', '');
+		const timeKey = String(row['START_TIME'] || row.timeFrom || '00:00').replace(':', '');
 		return `${dateKey}${timeKey}`;
 	}
 

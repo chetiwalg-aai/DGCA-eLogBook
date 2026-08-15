@@ -48,6 +48,14 @@ value maps needed.
 		statusbar: '#statusbar',
 	};
 
+	// injector-egcaexport.js (the AAI-side script that builds the queue)
+	// stores each row flat, keyed by the EGCA table's own header names —
+	// row['FROM_DATE'], row['POSTING_STATION'], row['TYPE_OF_DUTY'], etc.
+	// fillRow()/buildRowItemHtml() below read those keys directly (via
+	// `raw['HEADER_NAME']`) rather than through a translated camelCase copy,
+	// so a header rename/addition on the EGCA export table only needs
+	// updating here, not in a separate mapping layer.
+
 	// ── Alert capture (fed by alert-interceptor.js in the MAIN world) ──────
 	const ALERT_EVENT_NAME = 'dgca_alert_captured';
 	let _lastCapturedAlert = null;
@@ -466,18 +474,19 @@ value maps needed.
 
 	// ── Row filling logic ────────────────────────────────────────────────────
 	async function fillRow(row, wsoAtsText = 'WSO') {
-		const { timeFrom, timeTo } = row;
-		const raw = row.egcaRaw || {};
+		const timeFrom = row['START_TIME'];
+		const timeTo = row['END_TIME'];
+		const raw = row; // flat, keyed by the EGCA table's own header names
 
-		const { d, m, y } = parseDateDMY(raw.fromDate);
+		const { d, m, y } = parseDateDMY(raw['FROM_DATE']);
 		const fromDateStr = formatDDMMYYYY(d, m, y);
 
 		let toDateStr;
-		if (raw.fromDate === raw.toDate && timeTo === '00:00') {
+		if (raw['FROM_DATE'] === raw['TO_DATE'] && timeTo === '00:00') {
 			const n = addOneDay(d, m, y);
 			toDateStr = formatDDMMYYYY(n.d, n.m, n.y);
 		} else {
-			const { d: d2, m: m2, y: y2 } = parseDateDMY(raw.toDate);
+			const { d: d2, m: m2, y: y2 } = parseDateDMY(raw['TO_DATE']);
 			toDateStr = formatDDMMYYYY(d2, m2, y2);
 		}
 
@@ -486,17 +495,17 @@ value maps needed.
 		await setDatePickerValue(SEL.toDate, toDateStr);
 
 		// ── Posting Station (by text) ────────────────────────────────────────
-		await selectByText(SEL.postingStation, raw.postingStation);
+		await selectByText(SEL.postingStation, raw['POSTING_STATION']);
 		await waitForFieldValue('#letterIcaoCode');
 
 		// ── WSO / ATS EGCA ID (by text) ──────────────────────────────────────
 		await waitForSelectOptions(SEL.wsoEgcaId);
-		if (raw.atsEgcaId) {
+		if (raw['ATS_EGCA_ID']) {
 			try {
-				await selectByText(SEL.wsoEgcaId, raw.atsEgcaId);
+				await selectByText(SEL.wsoEgcaId, raw['ATS_EGCA_ID']);
 			} catch (err) {
-				const altText = raw.atsEgcaId.replace(/_/g, ' ');
-				if (altText !== raw.atsEgcaId) {
+				const altText = raw['ATS_EGCA_ID'].replace(/_/g, ' ');
+				if (altText !== raw['ATS_EGCA_ID']) {
 					await selectByText(SEL.wsoEgcaId, altText);
 				} else {
 					throw err;
@@ -507,101 +516,101 @@ value maps needed.
 		}
 
 
-		if (raw.rating) {
+		if (raw['RATING']) {
 			// ── Rating (by text) ─────────────────────────────────────────────────
-			await selectByText(SEL.ratingId, raw.rating);
+			await selectByText(SEL.ratingId, raw['RATING']);
 
 			// ── ATS Unit (by text) ───────────────────────────────────────────────
 			await waitForSelectOptions(SEL.atsUnitId);
-			await selectByText(SEL.atsUnitId, raw.atsUnit.replace(/-/g, ''));
+			await selectByText(SEL.atsUnitId, raw['ATS_UNIT'].replace(/-/g, ''));
 		}
 
 		// ── Type of Duty (by text) ───────────────────────────────────────────
-		await selectByText(SEL.typeOfDutyId, raw.typeOfDuty);
+		await selectByText(SEL.typeOfDutyId, raw['TYPE_OF_DUTY']);
 
-		if (raw.typeOfDuty === 'Operation Duty(Control)') {
-			if (raw.proficiencyCheck === 'Y') {
+		if (raw['TYPE_OF_DUTY'] === 'Operation Duty(Control)') {
+			if (raw['PROFICIENCY_CHECK'] === 'Y') {
 				await ensureCheckbox(SEL.isProficiency, true);
 				await waitForVisible(SEL.examinerLicNumDiv);
-				await selectByText(SEL.ojtEnv, raw.ojtEnv);
-				await typeIntoField(SEL.examinerAtcol, raw.instructorLicense);
+				await selectByText(SEL.ojtEnv, raw['OJT_ENV']);
+				await typeIntoField(SEL.examinerAtcol, raw['INSTRUCTOR_LICENSE']);
 				await waitForFieldValue(SEL.ojtTrainerName);
 			}
-			if (raw.newlyEstabStation) {
+			if (raw['NEWLY_ESTAB_STATION']) {
 				await ensureCheckbox('#isAtsUnitChecked', true);
 			}
 
-		} else if (raw.typeOfDuty === 'Instruction') {
-			if (raw.knowledgeCheck === 'Y') {
+		} else if (raw['TYPE_OF_DUTY'] === 'Instruction') {
+			if (raw['KNOWLEDGE_CHECK'] === 'Y') {
 				await ensureCheckbox(SEL.isTheoryClasses, true);
-				if (raw.traineeLicense) {
-					await typeIntoField(SEL.remarksField, `${raw.traineeName} (${raw.traineeLicense})`);
+				if (raw['TRAINEE_LICENSE']) {
+					await typeIntoField(SEL.remarksField, `${raw['TRAINEE_NAME']} (${raw['TRAINEE_LICENSE']})`);
 				}
-			} else if (raw.ojtProvidedCheck === 'Y') {
+			} else if (raw['OJT_PROVIDED_CHECK'] === 'Y') {
 				await ensureCheckbox(SEL.isOjtProvided, true);
 				await waitForVisible(SEL.traineeLicNumDiv);
-				await selectByText(SEL.ojtEnv, raw.ojtEnv);
-				await typeIntoField(SEL.traineeAtcol, raw.traineeLicense);
+				await selectByText(SEL.ojtEnv, raw['OJT_ENV']);
+				await typeIntoField(SEL.traineeAtcol, raw['TRAINEE_LICENSE']);
 				const instructorField = await waitForFieldValue('#nameOfInstructor');
-				if (raw.traineeLicenType === "SATCOL" && raw.traineeName) {
-					await typeIntoFieldAndVerify('#nameOfInstructor', raw.traineeName.toUpperCase());
-				} else if (raw.traineeName && !namesMatch(instructorField.value, raw.traineeName)) {
-					await typeIntoFieldAndVerify('#nameOfInstructor', raw.traineeName.toUpperCase());
+				if (raw['TRAINEE_LICEN_TYPE'] === "SATCOL" && raw['TRAINEE_NAME']) {
+					await typeIntoFieldAndVerify('#nameOfInstructor', raw['TRAINEE_NAME'].toUpperCase());
+				} else if (raw['TRAINEE_NAME'] && !namesMatch(instructorField.value, raw['TRAINEE_NAME'])) {
+					await typeIntoFieldAndVerify('#nameOfInstructor', raw['TRAINEE_NAME'].toUpperCase());
 				}
 			}
 
-		} else if (raw.typeOfDuty === 'OJT (On Job Training)') {
+		} else if (raw['TYPE_OF_DUTY'] === 'OJT (On Job Training)') {
 			await waitForVisible(SEL.examinerLicNumDiv);
-			await selectByText(SEL.ojtEnv, raw.ojtEnv);
-			await typeIntoField(SEL.examinerAtcol, raw.instructorLicense);
+			await selectByText(SEL.ojtEnv, raw['OJT_ENV']);
+			await typeIntoField(SEL.examinerAtcol, raw['INSTRUCTOR_LICENSE']);
 			await waitForFieldValue(SEL.ojtTrainerName);
 
-		} else if (raw.typeOfDuty === 'Examiner Functions') {
-			if (raw.knowledgeCheck === 'Y') {
+		} else if (raw['TYPE_OF_DUTY'] === 'Examiner Functions') {
+			if (raw['KNOWLEDGE_CHECK'] === 'Y') {
 				await ensureCheckbox(SEL.isTheoryClasses, true);
-				await typeIntoField('#nameOfInstructor', raw.instructorName);
-			} else if (raw.proficiencyCheck === 'Y') {
+				await typeIntoField('#nameOfInstructor', raw['INSTRUCTOR_NAME']);
+			} else if (raw['PROFICIENCY_CHECK'] === 'Y') {
 				await ensureCheckbox(SEL.isProficiency, true);
 				await waitForVisible(SEL.ojtFieldsDiv);
-				await selectByText(SEL.ojtEnv, raw.ojtEnv);
-				await typeIntoField(SEL.traineeAtcol, raw.traineeLicense);
+				await selectByText(SEL.ojtEnv, raw['OJT_ENV']);
+				await typeIntoField(SEL.traineeAtcol, raw['TRAINEE_LICENSE']);
 				await waitForFieldValue('#nameOfInstructor');
-			} else if (raw.skillTestCheck === 'Y') {
+			} else if (raw['SKILL_TEST_CHECK'] === 'Y') {
 				await ensureCheckbox(SEL.isSkillTest, true);
 				await waitForVisible(SEL.ojtFieldsDiv);
-				await selectByText(SEL.ojtEnv, raw.ojtEnv);
-				await typeIntoField(SEL.traineeAtcol, raw.traineeLicense);
+				await selectByText(SEL.ojtEnv, raw['OJT_ENV']);
+				await typeIntoField(SEL.traineeAtcol, raw['TRAINEE_LICENSE']);
 				const instructorField = await waitForFieldValue('#nameOfInstructor');
-				if (raw.traineeLicenType === "SATCOL" && raw.traineeName) {
-					await typeIntoFieldAndVerify('#nameOfInstructor', raw.traineeName.toUpperCase());
-				} else if (raw.traineeName && !namesMatch(instructorField.value, raw.traineeName)) {
-					await typeIntoFieldAndVerify('#nameOfInstructor', raw.traineeName.toUpperCase());
+				if (raw['TRAINEE_LICEN_TYPE'] === "SATCOL" && raw['TRAINEE_NAME']) {
+					await typeIntoFieldAndVerify('#nameOfInstructor', raw['TRAINEE_NAME'].toUpperCase());
+				} else if (raw['TRAINEE_NAME'] && !namesMatch(instructorField.value, raw['TRAINEE_NAME'])) {
+					await typeIntoFieldAndVerify('#nameOfInstructor', raw['TRAINEE_NAME'].toUpperCase());
 				}
 			}
 
-		} else if (raw.typeOfDuty === 'Classroom training/Classroom theory functions') {
+		} else if (raw['TYPE_OF_DUTY'] === 'Classroom training/Classroom theory functions') {
 			await waitForVisible(SEL.ojtFieldsDiv);
 			await waitForVisible(SEL.examinerLicNumDiv);
-			await typeIntoField(SEL.examinerAtcol, raw.instructorLicense);
+			await typeIntoField(SEL.examinerAtcol, raw['INSTRUCTOR_LICENSE']);
 			await waitForFieldValue(SEL.ojtTrainerName);
 
-		} else if (raw.typeOfDuty === 'Skill test') {
+		} else if (raw['TYPE_OF_DUTY'] === 'Skill test') {
 			await waitForVisible(SEL.ojtFieldsDiv);
-			await selectByText(SEL.ojtEnv, raw.ojtEnv);
-			await typeIntoField(SEL.ojtTrainerName, raw.instructorName);
+			await selectByText(SEL.ojtEnv, raw['OJT_ENV']);
+			await typeIntoField(SEL.ojtTrainerName, raw['INSTRUCTOR_NAME']);
 
-		} else if (raw.typeOfDuty === 'Familiarization of ATS Unit') {
+		} else if (raw['TYPE_OF_DUTY'] === 'Familiarization of ATS Unit') {
 			await waitForVisible(SEL.ojtFieldsDiv);
-			await selectByText(SEL.ojtEnv, raw.ojtEnv);
-			await typeIntoField('#newlyEstablisAtstsation', raw.newlyEstabStation);
+			await selectByText(SEL.ojtEnv, raw['OJT_ENV']);
+			await typeIntoField('#newlyEstablisAtstsation', raw['NEWLY_ESTAB_STATION']);
 
-		} else if (raw.typeOfDuty === 'ART(Annual Refresher Training)') {
+		} else if (raw['TYPE_OF_DUTY'] === 'ART(Annual Refresher Training)') {
 			// ART logic — no extra fields required today.
 		}
 		// Any other/unrecognised type of duty: no extra fields required.
 
-		if (raw.remarks) {
-			await typeIntoField(SEL.remarksField, raw.remarks);
+		if (raw['REMARKS']) {
+			await typeIntoField(SEL.remarksField, raw['REMARKS']);
 		}
 
 		await typeIntoField(SEL.startTime, timeFrom);
@@ -1552,22 +1561,22 @@ value maps needed.
 	// delete button) to show a status detail line, with the full error text
 	// for error rows.
 	function buildRowItemHtml(row, i, status, error, timing, { showDelete, expanded }) {
-		const raw = row.egcaRaw || {};
+		const raw = row; // flat, keyed by the EGCA table's own header names
 		const pillClass = displayPillClass(status);
 		const pillLabel = displayPillLabel(status);
 
-		const atsHtml = row.atsUnit
-			? `<span class="dgca-ext-row-item__num" style="color:#4fc3f7;">${escHtml(`${raw.rating} - ${row.atsUnit}`)}</span>` : '';
-		const dutyShort = raw.typeOfDuty ? raw.typeOfDuty.split('(')[0].trim() : '';
+		const atsHtml = raw['ATS_UNIT']
+			? `<span class="dgca-ext-row-item__num" style="color:#4fc3f7;">${escHtml(`${raw['RATING']} - ${raw['ATS_UNIT']}`)}</span>` : '';
+		const dutyShort = raw['TYPE_OF_DUTY'] ? raw['TYPE_OF_DUTY'].split('(')[0].trim() : '';
 		const dutyHtml = dutyShort
-			? `<span class="dgca-ext-row-item__num" title="${escHtml(raw.typeOfDuty || '')}">${escHtml(dutyShort)}</span>` : '';
+			? `<span class="dgca-ext-row-item__num" title="${escHtml(raw['TYPE_OF_DUTY'] || '')}">${escHtml(dutyShort)}</span>` : '';
 		let instrHtml = '';
-		if (raw.instructorLicense) {
-			instrHtml = `<span class="dgca-ext-row-item__num" style="color:#ba68c8;font-style:italic;" title="Instructor">👤 ${escHtml(raw.instructorName)}</span>`;
+		if (raw['INSTRUCTOR_LICENSE']) {
+			instrHtml = `<span class="dgca-ext-row-item__num" style="color:#ba68c8;font-style:italic;" title="Instructor">👤 ${escHtml(raw['INSTRUCTOR_NAME'])}</span>`;
 		}
 		let traineeHtml = '';
-		if (raw.traineeLicense) {
-			const label = raw.traineeName ? `${raw.traineeName} (${raw.traineeLicense})` : raw.traineeLicense;
+		if (raw['TRAINEE_LICENSE']) {
+			const label = raw['TRAINEE_NAME'] ? `${raw['TRAINEE_NAME']} (${raw['TRAINEE_LICENSE']})` : raw['TRAINEE_LICENSE'];
 			traineeHtml = `<span class="dgca-ext-row-item__num" style="color:#66bb6a;font-style:italic;" title="Trainee">🎓 ${escHtml(label)}</span>`;
 		}
 
@@ -1596,8 +1605,8 @@ value maps needed.
 				<div class="dgca-ext-row-item__main">
 					<div class="dgca-ext-row-item__info">
 						<span class="dgca-ext-row-item__num">${i + 1}</span>
-						<span class="dgca-ext-row-item__date">${escHtml(row.date || raw.fromDate || '')}</span>
-						<span class="dgca-ext-row-item__time">${escHtml(row.timeFrom)}–${escHtml(row.timeTo)}</span>
+						<span class="dgca-ext-row-item__date">${escHtml(row.date || raw['FROM_DATE'] || '')}</span>
+						<span class="dgca-ext-row-item__time">${escHtml(raw['START_TIME'])}–${escHtml(raw['END_TIME'])}</span>
 						${atsHtml}${dutyHtml}${instrHtml}${traineeHtml}${timeToAddHtml}
 					</div>
 					${pillHtml}
@@ -1788,7 +1797,7 @@ value maps needed.
 		// If every queued row already carries its own EGCA-Id, show that
 		// instead of the WSO/ATS toggle — the
 		// portal will match by exact text for all of them regardless.
-		const allHaveAtsId = total > 0 && rows.every(r => !!((r.egcaRaw || {}).atsEgcaId));
+		const allHaveAtsId = total > 0 && rows.every(r => !!r['ATS_EGCA_ID']);
 		if (allHaveAtsId) {
 			wsoRow.style.display = 'none';
 			atsIdValue.textContent = "Imported from IAMATC";
