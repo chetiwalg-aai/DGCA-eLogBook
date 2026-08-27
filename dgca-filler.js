@@ -766,6 +766,105 @@ value maps needed.
 			.dgca-ext-video-guide:hover {
 				text-decoration: underline;
 			}
+			.dgca-ext-toolbar-header-controls {
+				display: flex;
+				align-items: center;
+				gap: 6px;
+			}
+			.dgca-ext-iconbtn {
+				width: 18px;
+				height: 18px;
+				border: none;
+				background: transparent;
+				color: #7a7a95;
+				font-size: 12px;
+				line-height: 1;
+				border-radius: 4px;
+				cursor: pointer;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				flex-shrink: 0;
+			}
+			.dgca-ext-iconbtn:hover {
+				background: #232338;
+				color: #fff;
+			}
+			/* Minimize: header stays visible, everything below it collapses. */
+			.dgca-ext-toolbar--min .dgca-ext-toolbar-body {
+				display: none;
+			}
+			.dgca-ext-toolbar--min {
+				gap: 0;
+			}
+			/* Hidden entirely when the queue is empty. */
+			.dgca-ext-toolbar--hidden {
+				display: none !important;
+			}
+			/* Info (ⓘ) popover — appended to <body> (not the toolbar) so it
+			   isn't clipped by any ancestor's overflow, and positioned in JS
+			   relative to the info button. Same look as the EGCA-export
+			   page's floating-panel info popover (injector-egcaexport.js). */
+			.dgca-ext-info-popover {
+				position: fixed;
+				z-index: 999999;
+				width: 220px;
+				max-width: calc(100vw - 16px);
+				font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+				background: #16213e;
+				color: #cfd3e0;
+				border: 1px solid #2a3a5e;
+				border-radius: 8px;
+				box-shadow: 0 4px 16px rgba(0, 0, 0, .4);
+				padding: 10px 12px;
+				font-size: 11px;
+				line-height: 1.5;
+				display: none;
+			}
+			.dgca-ext-info-popover--open {
+				display: block;
+			}
+			.dgca-ext-info-notice {
+				display: flex;
+				gap: 6px;
+				align-items: flex-start;
+				color: #f0c674;
+				font-weight: 600;
+				margin-bottom: 8px;
+			}
+			.dgca-ext-info-links a {
+				display: flex; align-items: center; justify-content: center;
+				gap: 6px;
+				padding: 7px 10px;
+				background: rgba(79, 195, 247, 0.12);
+				border: 1px solid rgba(79, 195, 247, 0.45);
+				border-radius: 6px;
+				color: #7fd4ff; font-weight: 600; font-size: 11px;
+				text-decoration: none; text-align: center;
+				transition: background .15s, border-color .15s, color .15s;
+			}
+			.dgca-ext-info-links a:hover {
+				background: rgba(79, 195, 247, 0.22);
+				border-color: #4fc3f7;
+				color: #fff;
+			}
+			.dgca-ext-info-links a .dgca-ext-info-arrow {
+				transition: transform .15s;
+			}
+			.dgca-ext-info-links a:hover .dgca-ext-info-arrow {
+				transform: translateX(2px);
+			}
+			.dgca-ext-info-credit {
+				margin-top: 9px;
+				padding-top: 8px;
+				border-top: 1px solid #2a3a5e;
+				text-align: center;
+				font-size: 10px;
+				color: #bdbdd7;
+			}
+			.dgca-ext-info-credit .dgca-ext-shimmer-text {
+				animation-duration: 7s;
+			}
 			.dgca-ext-toolbar-row {
 				display: flex;
 				align-items: center;
@@ -1226,6 +1325,89 @@ value maps needed.
 		document.head.appendChild(style);
 	}
 
+	// ── Minimize state (persisted) ────────────────────────────────────
+	const TOOLBAR_MIN_KEY = 'dgca_toolbar_min';
+	function loadToolbarMinimized() {
+		try { return localStorage.getItem(TOOLBAR_MIN_KEY) === '1'; }
+		catch (_) { return false; }
+	}
+	function saveToolbarMinimized(min) {
+		try { localStorage.setItem(TOOLBAR_MIN_KEY, min ? '1' : '0'); } catch (_) { }
+	}
+	function setToolbarMinimized(toolbar, minBtn, min) {
+		toolbar.classList.toggle('dgca-ext-toolbar--min', min);
+		if (minBtn) {
+			minBtn.textContent = min ? '▢' : '—';
+			minBtn.title = min ? 'Expand' : 'Minimize';
+		}
+		saveToolbarMinimized(min);
+	}
+
+	// ── "ⓘ" info popover — unofficial-extension notice + credit ────────
+	// Same pattern as the EGCA-export page's floating-panel info popover
+	// (injector-egcaexport.js): appended to <body> so it isn't clipped by
+	// any ancestor's overflow, positioned in JS relative to the button.
+	// PLACEHOLDER: swap in the real Chrome Web Store URL once the official
+	// extension is published.
+    const OFFICIAL_EXTENSION_URL = 'https://chromewebstore.google.com/detail/egca-atc-logbook-autofill/fdhkbilacfkbfgghadoeefcblipnlhgd';
+
+	function buildInfoPopover() {
+		const existing = document.getElementById('dgca-ext-info-popover');
+		if (existing) return existing;
+
+		const pop = document.createElement('div');
+		pop.id = 'dgca-ext-info-popover';
+		pop.className = 'dgca-ext-info-popover';
+		pop.innerHTML = `
+			<div class="dgca-ext-info-notice">⚠ This is <strong>not</strong> the official extension.</div>
+			<div class="dgca-ext-info-links">
+				<a href="${OFFICIAL_EXTENSION_URL}" target="_blank" rel="noopener noreferrer">
+					🔗 Official eLogBook Extension <span class="dgca-ext-info-arrow">→</span>
+				</a>
+			</div>
+			<div class="dgca-ext-info-credit">
+				Made with ❤️ by <strong class="dgca-ext-shimmer-text dgca-ext-shimmer-text--footer">Gaurav Chetiwal</strong>
+			</div>
+		`;
+		document.body.appendChild(pop);
+		return pop;
+	}
+
+	function positionInfoPopover(pop, anchorBtn) {
+		const margin = 8;
+		const rect = anchorBtn.getBoundingClientRect();
+		pop.style.visibility = 'hidden';
+		pop.style.display = 'block';
+		const popRect = pop.getBoundingClientRect();
+
+		let left = rect.right - popRect.width;
+		left = Math.min(Math.max(left, margin), window.innerWidth - popRect.width - margin);
+
+		let top = rect.bottom + 6;
+		if (top + popRect.height > window.innerHeight - margin) {
+			top = rect.top - popRect.height - 6; // flip above if no room below
+		}
+		top = Math.max(top, margin);
+
+		pop.style.left = `${left}px`;
+		pop.style.top = `${top}px`;
+		pop.style.visibility = 'visible';
+	}
+
+	function closeInfoPopover(pop) {
+		pop.classList.remove('dgca-ext-info-popover--open');
+		pop.style.display = 'none';
+	}
+
+	function toggleInfoPopover(pop, anchorBtn) {
+		if (pop.classList.contains('dgca-ext-info-popover--open')) {
+			closeInfoPopover(pop);
+			return;
+		}
+		positionInfoPopover(pop, anchorBtn);
+		pop.classList.add('dgca-ext-info-popover--open');
+	}
+
 	function buildToolbar(heading) {
 		const existing = heading.querySelector('#dgca-ext-toolbar');
 		if (existing) return existing;
@@ -1237,49 +1419,55 @@ value maps needed.
 		toolbar.className = 'dgca-ext-toolbar';
 		toolbar.innerHTML = `
 			<div class="dgca-ext-toolbar-label">
-				<span>✈ <span class="dgca-ext-shimmer-text dgca-ext-shimmer-text--title">DGCA eLogBook Automator</span></span>
-				<a class="dgca-ext-video-guide" href="https://youtu.be/xppOqtbQIps" target="_blank" rel="noopener noreferrer">▶ Video Guide</a>
-			</div>
-			<div class="dgca-ext-divider"></div>
-			<div class="dgca-ext-columns">
-				<div class="dgca-ext-col-left">
-					<div class="dgca-ext-toolbar-row">
-						<button id="dgca-ext-btn-start" type="button">▶ Start Filling</button>
-						<button id="dgca-ext-btn-abort" type="button" style="display:none;">■ Abort</button>
-						<button id="dgca-ext-btn-clear-done" type="button" class="dgca-ext-btn-clear-done">✓ Clear Done</button>
-						<button id="dgca-ext-btn-clear-all" type="button" class="dgca-ext-btn-clear">🗑 Clear All</button>
-					</div>
-					<div id="dgca-ext-error-pill" class="dgca-ext-error-pill" style="display:none;" title="Click for full error details"></div>
-					<div class="dgca-ext-toolbar-row dgca-ext-wso-row" id="dgca-ext-wso-row">
-						<label class="dgca-ext-wso-option">
-							<input type="radio" name="dgca-ext-wso-ats-mode" id="dgca-ext-wso-ats-mode-ats" value="ats">
-							<strong>ATS</strong>
-						</label>
-						<label class="dgca-ext-wso-option">
-							<input type="radio" name="dgca-ext-wso-ats-mode" id="dgca-ext-wso-ats-mode-custom" value="custom">
-							<input type="text" id="dgca-ext-wso-custom-text" class="dgca-ext-wso-custom-text" value="WSO">
-						</label>
-					</div>
-					<div class="dgca-ext-toolbar-row dgca-ext-ats-id-info" id="dgca-ext-ats-id-info" style="display:none;">
-						<span>EGCA-Id: <strong id="dgca-ext-ats-id-value"></strong></span>
-					</div>
-					<div class="dgca-ext-progress-row" id="dgca-ext-progress-row" style="display:none;">
-						<div class="dgca-ext-toolbar-row">
-							<span id="dgca-ext-progress-text" class="dgca-ext-progress-text"></span>
-						</div>
-						<div class="dgca-ext-progress-track" id="dgca-ext-progress-track">
-							<div id="dgca-ext-progress-fill-success" class="dgca-ext-progress-fill dgca-ext-progress-fill--success"></div>
-							<div id="dgca-ext-progress-fill-error" class="dgca-ext-progress-fill dgca-ext-progress-fill--error"></div>
-						</div>
-					</div>
-					<div class="dgca-ext-footer">
-						Made with ❤️ by <strong class="dgca-ext-shimmer-text dgca-ext-shimmer-text--footer">Gaurav Chetiwal</strong> © 2026
-						<span class="dgca-ext-footer-version">v<span id="dgca-ext-app-version">…</span></span>
-					</div>
+				<span>✈ <span class="dgca-ext-shimmer-text dgca-ext-shimmer-text--title">eLogBook Assist Extension</span></span>
+				<div class="dgca-ext-toolbar-header-controls">
+					<a class="dgca-ext-video-guide" href="https://youtu.be/xppOqtbQIps" target="_blank" rel="noopener noreferrer">▶ Video Guide</a>
+					<button type="button" class="dgca-ext-iconbtn dgca-ext-info-btn" title="About this extension">ⓘ</button>
+					<button type="button" class="dgca-ext-iconbtn dgca-ext-min-btn" title="Minimize">—</button>
 				</div>
-				<div class="dgca-ext-col-right">
-					<div class="dgca-ext-col-right-label dgca-ext-shimmer-text dgca-ext-shimmer-text--queue" id="dgca-ext-col-right-label">Queue</div>
-					<div class="dgca-ext-row-list" id="dgca-ext-row-list"></div>
+			</div>
+			<div class="dgca-ext-toolbar-body" id="dgca-ext-toolbar-body">
+				<div class="dgca-ext-divider"></div>
+				<div class="dgca-ext-columns">
+					<div class="dgca-ext-col-left">
+						<div class="dgca-ext-toolbar-row">
+							<button id="dgca-ext-btn-start" type="button">▶ Start Filling</button>
+							<button id="dgca-ext-btn-abort" type="button" style="display:none;">■ Abort</button>
+							<button id="dgca-ext-btn-clear-done" type="button" class="dgca-ext-btn-clear-done">✓ Clear Done</button>
+							<button id="dgca-ext-btn-clear-all" type="button" class="dgca-ext-btn-clear">🗑 Clear All</button>
+						</div>
+						<div id="dgca-ext-error-pill" class="dgca-ext-error-pill" style="display:none;" title="Click for full error details"></div>
+						<div class="dgca-ext-toolbar-row dgca-ext-wso-row" id="dgca-ext-wso-row">
+							<label class="dgca-ext-wso-option">
+								<input type="radio" name="dgca-ext-wso-ats-mode" id="dgca-ext-wso-ats-mode-ats" value="ats">
+								<strong>ATS</strong>
+							</label>
+							<label class="dgca-ext-wso-option">
+								<input type="radio" name="dgca-ext-wso-ats-mode" id="dgca-ext-wso-ats-mode-custom" value="custom">
+								<input type="text" id="dgca-ext-wso-custom-text" class="dgca-ext-wso-custom-text" value="WSO">
+							</label>
+						</div>
+						<div class="dgca-ext-toolbar-row dgca-ext-ats-id-info" id="dgca-ext-ats-id-info" style="display:none;">
+							<span>EGCA-Id: <strong id="dgca-ext-ats-id-value"></strong></span>
+						</div>
+						<div class="dgca-ext-progress-row" id="dgca-ext-progress-row" style="display:none;">
+							<div class="dgca-ext-toolbar-row">
+								<span id="dgca-ext-progress-text" class="dgca-ext-progress-text"></span>
+							</div>
+							<div class="dgca-ext-progress-track" id="dgca-ext-progress-track">
+								<div id="dgca-ext-progress-fill-success" class="dgca-ext-progress-fill dgca-ext-progress-fill--success"></div>
+								<div id="dgca-ext-progress-fill-error" class="dgca-ext-progress-fill dgca-ext-progress-fill--error"></div>
+							</div>
+						</div>
+						<div class="dgca-ext-footer">
+							Made with ❤️ by <strong class="dgca-ext-shimmer-text dgca-ext-shimmer-text--footer">Gaurav Chetiwal</strong> © 2026
+							<span class="dgca-ext-footer-version">v<span id="dgca-ext-app-version">…</span></span>
+						</div>
+					</div>
+					<div class="dgca-ext-col-right">
+						<div class="dgca-ext-col-right-label dgca-ext-shimmer-text dgca-ext-shimmer-text--queue" id="dgca-ext-col-right-label">Queue</div>
+						<div class="dgca-ext-row-list" id="dgca-ext-row-list"></div>
+					</div>
 				</div>
 			</div>
 		`;
@@ -1303,10 +1491,38 @@ value maps needed.
 		const errorPill = toolbar.querySelector('#dgca-ext-error-pill');
 		const colRightLabel = toolbar.querySelector('#dgca-ext-col-right-label');
 		const appVersionEl = toolbar.querySelector('#dgca-ext-app-version');
+		const infoBtn = toolbar.querySelector('.dgca-ext-info-btn');
+		const minBtn = toolbar.querySelector('.dgca-ext-min-btn');
 
 		try {
 			appVersionEl.textContent = chrome.runtime.getManifest().version;
 		} catch (_) { }
+
+		// Minimize — header stays visible, body (columns/footer) collapses.
+		setToolbarMinimized(toolbar, minBtn, loadToolbarMinimized());
+		minBtn.addEventListener('click', () => {
+			setToolbarMinimized(toolbar, minBtn, !toolbar.classList.contains('dgca-ext-toolbar--min'));
+		});
+
+		// Info popover.
+		const infoPopover = buildInfoPopover();
+		infoBtn.addEventListener('click', (e) => {
+			e.stopPropagation();
+			toggleInfoPopover(infoPopover, infoBtn);
+		});
+		document.addEventListener('click', (e) => {
+			if (!infoPopover.classList.contains('dgca-ext-info-popover--open')) return;
+			if (e.target.closest('#dgca-ext-info-popover') || e.target.closest('.dgca-ext-info-btn')) return;
+			closeInfoPopover(infoPopover);
+		});
+		document.addEventListener('keydown', (e) => {
+			if (e.key === 'Escape') closeInfoPopover(infoPopover);
+		});
+		window.addEventListener('resize', () => {
+			if (infoPopover.classList.contains('dgca-ext-info-popover--open')) {
+				positionInfoPopover(infoPopover, infoBtn);
+			}
+		});
 
 		btnClearAll.addEventListener('click', () => {
 			if (_sessionRunning) return;
@@ -1392,7 +1608,7 @@ value maps needed.
 		});
 
 		_toolbarEls = {
-			btnStart, btnAbort, btnClearDone, btnClearAll, wsoAtsModeAts, wsoAtsModeCustom, wsoCustomText,
+			toolbar, btnStart, btnAbort, btnClearDone, btnClearAll, wsoAtsModeAts, wsoAtsModeCustom, wsoCustomText,
 			wsoRow, atsIdInfo, atsIdValue, rowList, progressRow, progressText,
 			progressFillSuccess, progressFillError, errorPill, colRightLabel,
 		};
@@ -1743,7 +1959,7 @@ value maps needed.
 		if (!_toolbarEls) return;
 		const mySeq = ++_refreshSeq;
 		const {
-			btnStart, btnAbort, btnClearDone, btnClearAll, wsoAtsModeAts, wsoAtsModeCustom, wsoCustomText,
+			toolbar, btnStart, btnAbort, btnClearDone, btnClearAll, wsoAtsModeAts, wsoAtsModeCustom, wsoCustomText,
 			wsoRow, atsIdInfo, atsIdValue, colRightLabel,
 		} = _toolbarEls;
 
@@ -1787,6 +2003,11 @@ value maps needed.
 			hideToolbarProgress();
 			hideToolbarError();
 		}
+
+		// Nothing queued — hide the whole toolbar rather than show an
+		// empty shell. It reappears the moment a row is imported (this
+		// runs again via the dgca_pending_rows storage listener).
+		toolbar.classList.toggle('dgca-ext-toolbar--hidden', total === 0);
 
 		btnClearDone.disabled = _sessionRunning || !statuses.some(s => s === 'submitted');
 
@@ -2029,6 +2250,33 @@ value maps needed.
 		}
 	}
 
+	// Sanity check before a session starts: the IAMATC name (whoever built
+	// the queue on the AAI EGCA-export page, dgca_queue_user) should be the
+	// same person as the EGCA name (whoever is logged into *this* DGCA page
+	// right now, per getDgcaPageUserName()). A mismatch usually means the
+	// queue was built under one login and is about to be filled under
+	// another. namesMatch() already tolerates whitespace/salutation-only
+	// differences, so this only fires on a genuine mismatch.
+	async function confirmNamesMatchOrAbort() {
+		let queueUser = null;
+		try {
+			const data = await window.DGCA_STORAGE.get(['dgca_queue_user']);
+			queueUser = data?.dgca_queue_user || null;
+		} catch (_) { }
+
+		const iamatcWho = queueUser && (queueUser.name || queueUser.loginId);
+		const egcaWho = getDgcaPageUserName();
+
+		if (!iamatcWho || !egcaWho) return true; // nothing to compare, proceed
+		if (namesMatch(iamatcWho, egcaWho)) return true;
+
+		return confirm(
+			`The queue was built as "${iamatcWho}" (IAMATC) but you're logged in ` +
+			`as "${egcaWho}" (EGCA) on this DGCA page — these names look different.\n\n` +
+			`Continue filling anyway?`
+		);
+	}
+
 	async function startSession() {
 		if (_sessionRunning) return;
 		hideToolbarError();
@@ -2044,6 +2292,10 @@ value maps needed.
 		if (rows.length === 0) {
 			showToolbarProgress('Start failed');
 			showToolbarError('No rows queued.');
+			return;
+		}
+		if (!(await confirmNamesMatchOrAbort())) {
+			showToolbarProgress('Start cancelled');
 			return;
 		}
 		try {
