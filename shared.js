@@ -66,16 +66,14 @@ gone).
 		SKIPPED: 'skipped',
 	};
 
-	// ── Queue sorting — by date then start time. Used by injector-egcaexport
-	// (when merging newly-selected rows into the existing queue) and
-	// dgca-filler.js's toolbar (when loading the queue from storage). Keeps
-	// statuses/errors aligned to rows after reordering.
+	// ── Queue sorting — by date then start time. Used by the EGCA injector
+	// before writing the selected rows to the queue, and by the DGCA toolbar
+	// when loading the queue from storage. Keeps statuses/errors aligned to
+	// rows after reordering.
 	//
-	// Rows are now flat, keyed by the EGCA table's own header names
-	// (row['START_TIME'], etc.) rather than a camelCase-normalised
-	// row.timeFrom — row.timeFrom is read as a fallback only, for any row
-	// still in storage from before that change (e.g. a queue built by an
-	// older version of the extension that hasn't been cleared yet).
+	// Rows are flat objects keyed by internal field names such as
+	// row['START_TIME']. The legacy row.timeFrom form is still accepted as
+	// a fallback for queues created by older extension versions.
 	function rowSortKey(row) {
 		const [d, m, y] = String(row.date || '').split('-');
 		const dateKey = `${y || '0000'}${m || '00'}${d || '00'}`;

@@ -1,13 +1,115 @@
-// Runs on https://iamatc.aai.aero/atc/EGcAexport* — adds a single "Import
-// Data to Queue" button next to the portal's native "Generate Preview"
-// button, pushing every data row currently in the preview table into the
-// shared queue that dgca-filler.js's toolbar reads on the DGCA portal.
-//
-// CHANGED: Each row has a checkbox (inside the FROM_DATE cell, which is
-// already contenteditable="true", Only checked rows are imported.
+// Runs on https://iamatc.aai.aero/atc/EGcAexport*. Adds an "Import Data to
+// Queue" button next to the portal's "Generate Preview" button. Only rows
+// selected in the preview are written to the shared queue used by the DGCA
+// e-LogBook toolbar.
 (function () {
     'use strict';
 
+    // ── Column mapping ──────────────────────────────────────────────────
+    // Source of truth is the site's OWN "Send to Extension" script block
+    // (inline on this page), which declares its own
+    //   var HEADER_TO_INTERNAL = { "From Date": "FROM_DATE", ... };
+    // We scrape and parse that literal at runtime instead of hardcoding a
+    // duplicate copy here, so if the portal ever adds/renames/reorders
+    // columns, this extension picks up the change automatically without
+    // needing a new release. The list below is kept ONLY as a fallback for
+    // the rare case the site's script is missing, renamed, or the literal
+    // can't be parsed (e.g. the portal ships a minified/obfuscated bundle).
+    var FALLBACK_HEADER_TO_INTERNAL = {
+        "Schema Version": "CSV_SCHEMA_VERSION",
+        "New ATS Unit?": "NEWLY_ESTAB_UNIT_CHECK",
+        "From Date": "FROM_DATE",
+        "To Date": "TO_DATE",
+        "Posting Station": "POSTING_STATION",
+        "ICAO Code": "ICAO_CODE",
+        "ATS eGCA ID": "ATS_EGCA_ID",
+        "Rating": "RATING",
+        "ATS Unit": "ATS_UNIT",
+        "Briefing Done": "BRIEFING_DONE",
+        "Type of Duty": "TYPE_OF_DUTY",
+        "Start Time": "START_TIME",
+        "End Time": "END_TIME",
+        "Total Duration": "TOTAL_DURATION",
+        "Remarks": "REMARKS",
+        "Knowledge Check": "KNOWLEDGE_CHECK",
+        "Skill Test Check": "SKILL_TEST_CHECK",
+        "OJT Provided": "OJT_PROVIDED_CHECK",
+        "OJT Environment": "OJT_ENV",
+        "Trainee License": "TRAINEE_LICENSE",
+        "Trainee Name": "TRAINEE_NAME",
+        "Instructor License": "INSTRUCTOR_LICENSE",
+        "Instructor Name": "INSTRUCTOR_NAME",
+        "Proficiency Check": "PROFICIENCY_CHECK",
+    };
+
+    // Scrapes every inline <script> on the page for a
+    // "HEADER_TO_INTERNAL = { ... };" object-literal assignment and parses
+    // it. This works even though the site's copy of the variable is closed
+    // over inside its own IIFE (and never attached to window) — we only
+    // need the raw *source text* of the <script> tag, which the DOM always
+    // exposes via .textContent regardless of what the page's JS does with
+    // the variable at runtime. Only ever asked to parse a plain object
+    // literal of string:string pairs, never executed as page code.
+    function extractSiteHeaderMap() {
+        const scripts = document.querySelectorAll('script:not([src])');
+        for (const script of scripts) {
+            const text = script.textContent;
+            if (!text || text.indexOf('HEADER_TO_INTERNAL') === -1) continue;
+            const match = text.match(/HEADER_TO_INTERNAL\s*=\s*(\{[\s\S]*?\})\s*;/);
+            if (!match) continue;
+            try {
+                // CSP-safe parser: the site's mapping is a simple object literal
+                // containing only quoted string keys and quoted string values.
+                // Never use eval()/Function() here — Chrome blocks string-to-JS
+                // evaluation under the site's CSP.
+                const obj = {};
+                const pairRe = /(["\'])(.*?)\1\s*:\s*(["\'])(.*?)\3\s*,?/g;
+                let pair;
+                let count = 0;
+                while ((pair = pairRe.exec(match[1])) !== null) {
+                    const key = pair[2].replace(/\\(["\'])/g, '$1');
+                    const value = pair[4].replace(/\\(["\'])/g, '$1');
+                    obj[key] = value;
+                    count++;
+                }
+                if (count > 0 && Object.keys(obj).length === count) return obj;
+            } catch (e) {
+                console.warn('[dgca-injector] Failed to parse site HEADER_TO_INTERNAL, ' +
+                    'falling back to built-in column mapping.', e);
+            }
+        }
+        return null;
+    }
+
+    const siteHeaderMap = extractSiteHeaderMap();
+    if (siteHeaderMap) {
+        console.log('[dgca-injector] Using column mapping read from the site\'s own script ' +
+            '(' + Object.keys(siteHeaderMap).length + ' columns).');
+    } else {
+        console.warn('[dgca-injector] Could not find/parse the site\'s HEADER_TO_INTERNAL ' +
+            'mapping — using the extension\'s built-in fallback mapping instead.');
+    }
+    // Merge so a partial/stale site map still gets filled in by the
+    // fallback rather than silently dropping columns.
+    var HEADER_TO_INTERNAL = Object.assign({}, FALLBACK_HEADER_TO_INTERNAL, siteHeaderMap || {});
+
+    // The portal's <th> text sometimes has no whitespace between words
+    // ("FromDate" instead of "From Date"), so match on a whitespace- and
+    // case-normalised key instead of an exact string.
+    function normaliseHeaderKey(s) {
+        return String(s || '').replace(/\s+/g, '').toLowerCase();
+    }
+    const NORMALISED_HEADER_TO_INTERNAL = {};
+    Object.keys(HEADER_TO_INTERNAL).forEach(k => {
+        NORMALISED_HEADER_TO_INTERNAL[normaliseHeaderKey(k)] = HEADER_TO_INTERNAL[k];
+    });
+
+    if (!window.DGCA) {
+        console.error('[dgca-injector] window.DGCA is not defined — this script must load ' +
+            'AFTER the shared DGCA content script on this page. Check manifest.json load order ' +
+            'and that both scripts are matched to this URL. Aborting to avoid a silent crash.');
+        return;
+    }
     const { sortQueue } = window.DGCA;
 
     function normaliseEgcaDate(dateStr) {
@@ -21,42 +123,65 @@
         return `${date}|${station}|${timeFrom}|${timeTo}|${dutyType}`;
     }
 
-    // readCellValue is UNCHANGED — <input type="checkbox"> has no
-    // textContent, so td.textContent.trim() still returns just the
-    // cell's data text even with our checkbox inside the <td>.
+    // Checkboxes live inside data cells; textContent still returns the
+    // cell's data text, while selects use their current value.
     function readCellValue(td) {
         const select = td.querySelector('select');
         if (select) return select.value;
         return td.textContent.trim();
     }
 
-    // CHANGED: skip the native checkbox column (<th> containing the
-    // #selectAllRows checkbox) so headers stay aligned with the real data
-    // columns, matching how downloadEgcaCsv() reads the table.
+    // STEP 1 — read the table exactly as it is on the page, no mapping yet.
+    // Skips the native checkbox column (<th> containing the #selectAllRows
+    // checkbox) so headers stay aligned with the real data columns,
+    // matching how downloadEgcaCsv() reads the table. Returns the RAW
+    // visible header labels (e.g. "From Date"), untouched.
     function getTableHeaders(table) {
         const thead = table.querySelector('thead');
         if (!thead) return [];
         const headerRow = thead.querySelector('tr');
         if (!headerRow) return [];
         return Array.from(headerRow.querySelectorAll('th'))
-            .filter(th => !th.querySelector('input[type="checkbox"]'))
+            .filter(th => {
+                if (th.querySelector('input[type="checkbox"]')) return false;
+                const norm = normaliseHeaderKey(th.textContent);
+                if (norm === 'select' || norm === '') return false; // select/blank column, no data cell to match
+                return true;
+            })
             .map(th => th.textContent.trim());
     }
 
-    // CHANGED: skip the native checkbox <td> so cells stay aligned with
-    // the headers returned by getTableHeaders above.
-    function readRowByHeaders(tr, headers) {
+    // STEP 1 (cont.) — read a row's cell values keyed by those SAME raw
+    // header labels. Skips the native checkbox <td> so cells stay aligned
+    // with the headers returned by getTableHeaders above. Still no mapping
+    // to internal names at this point — just table_label -> value.
+    function readRowByHeaders(tr, rawHeaders) {
         const cells = Array.from(tr.children)
             .filter(el => el.tagName === 'TD' && !el.querySelector('input.row-select-cb'));
         const raw = {};
-        headers.forEach((name, i) => {
+        rawHeaders.forEach((label, i) => {
             const td = cells[i];
-            raw[name] = td ? readCellValue(td) : '';
+            raw[label] = td ? readCellValue(td) : '';
         });
         return raw;
     }
 
-    // ── NEW: native checkbox helpers ───────────────────────────────────
+    // STEP 2 — now apply the column mapping. Takes a row keyed by raw
+    // table labels (from readRowByHeaders) and returns a new object keyed
+    // by internal names, via NORMALISED_HEADER_TO_INTERNAL. Any label the
+    // map doesn't recognise is passed through unchanged (better to keep
+    // the data under its raw label than to silently drop it).
+    function mapRowToInternal(rawRow) {
+        const mapped = {};
+        Object.keys(rawRow).forEach(label => {
+            const norm = normaliseHeaderKey(label);
+            const internalKey = NORMALISED_HEADER_TO_INTERNAL[norm] || label;
+            mapped[internalKey] = rawRow[label];
+        });
+        return mapped;
+    }
+
+    // ── Native checkbox helpers ────────────────────────────────────────
     function hasNativeCheckboxes(table) {
         return !!table.querySelector('tbody input.row-select-cb');
     }
@@ -72,8 +197,11 @@
         headerCb.checked = rowCbs.length > 0 && rowCbs.every(cb => cb.checked);
     }
 
-    function parseRow(tr, headers) {
-        const raw = readRowByHeaders(tr, headers);
+    function parseRow(tr, rawHeaders) {
+        // Read the row from the preview table.
+        const rawByLabel = readRowByHeaders(tr, rawHeaders);
+        // Map the preview headers to the internal field names.
+        const raw = mapRowToInternal(rawByLabel);
         const rawFromDate = raw['FROM_DATE'] || '';
         if (!/^\d{2}\/\d{2}\/\d{4}$/.test(rawFromDate)) return null;
         const date = normaliseEgcaDate(rawFromDate);
@@ -86,19 +214,44 @@
         return { id: rowId(date, station, timeFrom, timeTo, dutyType), date, ...raw };
     }
 
-    function getDataRowsFromTable(table) {
-        const headers = getTableHeaders(table);
+    let _tableCache = { table: null, headers: null, rows: null, tbody: null };
+
+    function invalidateTableCache(table = null) {
+        if (!table || _tableCache.table === table) {
+            _tableCache.rows = null;
+            _tableCache.headers = null;
+            if (table) _tableCache.table = table;
+        }
+    }
+
+    function getDataRowsFromTable(table, force = false) {
+        if (!table) return [];
+        const tbody = table.querySelector('tbody');
+        if (!tbody) return [];
+        if (!force &&
+            _tableCache.table === table &&
+            _tableCache.tbody === tbody &&
+            _tableCache.rows) {
+            return _tableCache.rows;
+        }
+
+        const headers = (!force &&
+            _tableCache.table === table &&
+            _tableCache.tbody === tbody &&
+            _tableCache.headers) ? _tableCache.headers : getTableHeaders(table);
+
         if (headers.length === 0) return [];
         const rows = [];
-        table.querySelectorAll('tbody tr').forEach(tr => {
+        tbody.querySelectorAll('tr').forEach(tr => {
             const row = parseRow(tr, headers);
             if (row) rows.push(row);
         });
+        _tableCache = { table, headers, rows, tbody };
         return rows;
     }
 
     // ══════════════════════════════════════════════════════════════════
-    //  NEW — Row selection state & checkbox injection
+    //  Row selection state and checkbox handling
     // ══════════════════════════════════════════════════════════════════
 
     const _rowSelection = new Map(); // rowId → boolean
@@ -146,7 +299,7 @@
 
     // Sync panel badge + import button label with selection count.
     function updateSelectionDisplay() {
-        const table = document.querySelector('table');
+        const table = document.getElementById('csvPreviewTable') || document.querySelector('table');
         const total = table ? getDataRowsFromTable(table).length : 0;
         const selected = getSelectedCount();
 
@@ -186,13 +339,13 @@
         });
     }
 
-    // ── NEW: wire up the site's native per-row checkboxes ──────────────
+    // ── Wire up the site's native per-row checkboxes ─────────────────
     // Preferred path now that the portal renders its own <input
     // type="checkbox" class="row-select-cb"> in each row (plus a
     // #selectAllRows header checkbox). We just lock the editable cells
     // (unrelated to selection) and mirror checkbox state into
     // _rowSelection so the rest of the code (getSelectedCount,
-    // onImportClick, etc.) keeps working unchanged.
+    // onImportClick, etc.) can use the same selection state.
     function enableNativeSelection(table) {
         lockEditableCells(table);
         const headers = getTableHeaders(table);
@@ -245,8 +398,8 @@
             tr.classList.add('dgca-row-clickable');
             tr.classList.toggle('dgca-row-selected', _rowSelection.get(row.id));
 
-            // Guard against re-binding the click listener if this same
-            // <tr> is re-processed (e.g. by the repeat-run in the observer).
+            // Avoid binding the same row more than once when the observer
+            // processes the table again.
             if (tr.dataset.dgcaClickBound) continue;
             tr.dataset.dgcaClickBound = '1';
 
@@ -264,7 +417,7 @@
 
     // ── Panel-level Select All / Deselect All ─────────────────────────
     function selectAllRows() {
-        const table = document.querySelector('table');
+        const table = document.getElementById('csvPreviewTable') || document.querySelector('table');
         if (table && hasNativeCheckboxes(table)) {
             table.querySelectorAll('tbody input.row-select-cb').forEach(cb => { cb.checked = true; });
             const headerCb = table.querySelector('thead input#selectAllRows');
@@ -279,7 +432,7 @@
     }
 
     function deselectAllRows() {
-        const table = document.querySelector('table');
+        const table = document.getElementById('csvPreviewTable') || document.querySelector('table');
         if (table && hasNativeCheckboxes(table)) {
             table.querySelectorAll('tbody input.row-select-cb').forEach(cb => { cb.checked = false; });
             const headerCb = table.querySelector('thead input#selectAllRows');
@@ -294,7 +447,7 @@
     }
 
     // ══════════════════════════════════════════════════════════════════
-    //  Existing helpers (unchanged except where noted)
+    //  Portal and queue helpers
     // ══════════════════════════════════════════════════════════════════
 
     function getAaiUser() {
@@ -327,14 +480,14 @@
         panel.classList.toggle('dgca-panel--hidden', !hasData);
     }
 
-    // ── injects click-to-select behaviour, shows selection count ───────
+    // ── Update preview selection state and panel counts ───────────────
     function refreshRowCountBadge() {
-        const table = document.querySelector('table');
-        const count = table ? getDataRowsFromTable(table).length : 0;
+        const table = document.getElementById('csvPreviewTable') || document.querySelector('table');
+        const allRows = table ? getDataRowsFromTable(table) : [];
+        const count = allRows.length;
         _previewRowCount = count;
 
         if (table && count > 0) {
-            const allRows = getDataRowsFromTable(table);
             allRows.forEach(r => {
                 if (!_rowSelection.has(r.id)) _rowSelection.set(r.id, false);
             });
@@ -360,7 +513,7 @@
             const sendBtns = document.querySelectorAll('.dgca-send-btn');
             if (warnEls.length === 0 && clearBtns.length === 0 && sendBtns.length === 0) return;
 
-            const data = await window.DGCA_STORAGE.get([
+            const data = await chrome.storage.local.get([
                 'dgca_pending_rows', 'dgca_queue_user', 'dgca_session_running'
             ]);
             const existing = data?.dgca_pending_rows || [];
@@ -396,7 +549,7 @@
 
     async function clearQueue() {
         try {
-            const data = await window.DGCA_STORAGE.get(['dgca_session_running']);
+            const data = await chrome.storage.local.get(['dgca_session_running']);
             if (data?.dgca_session_running) {
                 showStatus(
                     'A fill session is running on the DGCA tab — wait for it to finish ' +
@@ -407,7 +560,7 @@
         } catch (_) { }
         if (!confirm('Clear the entire DGCA queue?')) return;
         try {
-            await window.DGCA_STORAGE.remove([
+            await chrome.storage.local.remove([
                 'dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors',
                 'dgca_row_timings', 'dgca_session_ts', 'dgca_queue_user',
             ]);
@@ -420,13 +573,10 @@
     async function importRowsToQueue(newRows) {
         if (!newRows || newRows.length === 0) return { status: 'no_rows' };
         const currentUser = getAaiUser();
-        const data = await window.DGCA_STORAGE.get([
-            'dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors',
-            'dgca_queue_user', 'dgca_session_running'
+        const data = await chrome.storage.local.get([
+            'dgca_pending_rows', 'dgca_queue_user', 'dgca_session_running'
         ]);
         const existing = data?.dgca_pending_rows || [];
-        const existingStatus = data?.dgca_row_status || [];
-        const existingErrors = data?.dgca_row_errors || {};
         const queueUser = data?.dgca_queue_user || null;
 
         if (data?.dgca_session_running) {
@@ -442,25 +592,22 @@
             };
         }
 
-        const existingMap = {};
-        existing.forEach((r, i) => { existingMap[r.id] = { row: r, index: i }; });
-        const toAdd = newRows.filter(r => !existingMap[r.id]);
-        if (toAdd.length === 0) return { status: 'already_queued', total: newRows.length };
-
-        const rawMerged = [...existing, ...toAdd];
-        const rawStatuses = [...existingStatus, ...toAdd.map(() => 'pending')];
-        const { rows: merged, statuses: mergedStatus, errors: mergedErrors } =
-            sortQueue(rawMerged, rawStatuses, existingErrors);
+        // Overwrite: each Import replaces the whole queue with the newly
+        // selected rows, instead of merging into whatever was queued before.
+        const rawStatuses = newRows.map(() => 'pending');
+        const { rows: sorted, statuses: sortedStatus, errors: sortedErrors } =
+            sortQueue(newRows, rawStatuses, {});
         const nextQueueUser = currentUser || queueUser || null;
 
-        await window.DGCA_STORAGE.set({
-            dgca_pending_rows: merged,
-            dgca_row_status: mergedStatus,
-            dgca_row_errors: mergedErrors,
+        await chrome.storage.local.set({
+            dgca_pending_rows: sorted,
+            dgca_row_status: sortedStatus,
+            dgca_row_errors: sortedErrors,
+            dgca_row_timings: {},
             dgca_session_ts: Date.now(),
             dgca_queue_user: nextQueueUser,
         });
-        return { status: 'ok', added: toAdd.length, total: merged.length };
+        return { status: 'ok', added: sorted.length, total: sorted.length };
     }
 
     function applyImportResultUI(result) {
@@ -474,18 +621,15 @@
             case 'user_mismatch':
                 showStatus(`Queue is for ${result.queueUserName} — clear it before adding as ${result.currentUserName}.`, 'error');
                 return;
-            case 'already_queued':
-                showStatus(`All ${result.total} rows are already in the queue.`, 'success');
-                return;
             case 'ok':
-                showStatus(`✓ ${result.added} added (${result.total} total). Open the DGCA Entry Page to fill the entries.`, 'success');
+                showStatus(`✓ Queue replaced with ${result.total} row${result.total === 1 ? '' : 's'}. Open the DGCA Entry Page to fill the entries.`, 'success');
                 return;
         }
     }
 
-    // ── CHANGED: Only imports SELECTED rows. ──────────────────────────
+    // ── Import selected rows ─────────────────────────────────────────
     function onImportClick() {
-        const table = document.querySelector('table');
+        const table = document.getElementById('csvPreviewTable') || document.querySelector('table');
         if (!table) {
             showStatus('No preview table found. Click "Generate Preview" first.', 'error');
             return;
@@ -507,7 +651,7 @@
             });
     }
 
-    // ── Shimmer (unchanged) ───────────────────────────────────────────
+    // ── Shimmer effect ───────────────────────────────────────────────
     function injectShimmerStyle() {
         if (document.getElementById('dgca-ext-shimmer-style')) return;
         const style = document.createElement('style');
@@ -552,18 +696,47 @@
         const style = document.createElement('style');
         style.id = 'dgca-panel-style';
         style.textContent = `
+            :root {
+                --dgca-ease: cubic-bezier(0.16, 1, 0.3, 1);
+                --dgca-ease-in: cubic-bezier(0.4, 0, 0.2, 1);
+            }
+            @keyframes dgca-panel-pop-in {
+                from { opacity: 0; transform: translateY(8px) scale(0.96); }
+                to   { opacity: 1; transform: translateY(0) scale(1); }
+            }
+            @media (prefers-reduced-motion: reduce) {
+                .dgca-panel, .dgca-panel-body, .shimmer-text { animation: none !important; transition: none !important; }
+            }
             .dgca-panel {
                 position: fixed; z-index: 999997;
                 width: 210px; max-width: calc(100vw - 16px);
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-                font-size: 11px; background: #16213e; color: #e0e0e0;
-                border: 1px solid #2a3a5e; border-radius: 8px;
-                box-shadow: 0 4px 16px rgba(0,0,0,.35); overflow: hidden;
+                font-size: 11px; color: #e0e0e0;
+                background: linear-gradient(165deg, #1c2a4f, #131b34);
+                border: 1px solid #2a3a5e; border-radius: 12px;
+                box-shadow: 0 12px 32px rgba(0,0,0,.4), 0 0 0 1px rgba(79,195,247,.08) inset;
+                overflow: hidden;
+                /* No fill-mode here (default: none) deliberately — the panel
+                   is draggable via an inline transform style (see
+                   makePanelDraggable below), and an animation with
+                   fill: both/forwards would keep re-asserting its own end-
+                   state transform over that inline style after the entrance
+                   plays, silently breaking drag the first time it's tried
+                   right after the panel mounts. Without fill, the animation
+                   only owns the transform property for its .3s runtime and
+                   hands control back to the normal cascade afterward. */
+                animation: dgca-panel-pop-in .3s var(--dgca-ease);
+                transition: box-shadow .2s ease;
+                /* Panel repaints on drag (position) and on every queue/status
+                   update; containment keeps that from forcing layout checks
+                   on the much larger host page around it. */
+                contain: layout paint style;
             }
+            .dgca-panel--dragging { box-shadow: 0 18px 40px rgba(0,0,0,.5); }
             .dgca-panel-header {
                 display: flex; align-items: center; justify-content: space-between;
-                gap: 6px; padding: 5px 5px 5px 8px;
-                background: #1a2748; cursor: move; user-select: none;
+                gap: 6px; padding: 6px 6px 6px 9px;
+                background: #16213e; cursor: move; user-select: none;
                 border-bottom: 1px solid #2a3a5e;
             }
             .dgca-panel.dgca-panel--min .dgca-panel-header { border-bottom: none; }
@@ -577,9 +750,29 @@
                 color: #aab0c0; font-size: 11px; line-height: 1; border-radius: 4px;
                 cursor: pointer; display: flex; align-items: center; justify-content: center;
             }
-            .dgca-panel-iconbtn:hover { background: #2a3a5e; color: #fff; }
-            .dgca-panel-body { padding: 7px; display: flex; flex-direction: column; gap: 6px; }
-            .dgca-panel.dgca-panel--min .dgca-panel-body { display: none; }
+            .dgca-panel-iconbtn {
+                transition: background .18s var(--dgca-ease-in), color .18s ease, transform .18s var(--dgca-ease);
+            }
+            .dgca-panel-iconbtn:hover { background: #2a3a5e; color: #fff; transform: scale(1.12); }
+            .dgca-panel-iconbtn:active { transform: scale(0.92); }
+            /* Same max-height/opacity collapse technique used by the DGCA
+               toolbar (dgca-filler.js) — display:none can't be animated, so
+               this is what makes minimize/expand feel intentional. */
+            .dgca-panel-body {
+                padding: 8px; display: flex; flex-direction: column; gap: 6px;
+                max-height: 600px; opacity: 1; overflow: hidden;
+                transition: max-height .35s var(--dgca-ease), opacity .2s ease .05s, padding .35s var(--dgca-ease);
+            }
+            .dgca-panel.dgca-panel--min .dgca-panel-body {
+                max-height: 0; opacity: 0; padding-top: 0; padding-bottom: 0;
+                transition: max-height .26s var(--dgca-ease-in), opacity .12s ease, padding .26s var(--dgca-ease-in);
+            }
+            .dgca-panel-min-btn {
+                transition: transform .28s var(--dgca-ease);
+            }
+            .dgca-panel.dgca-panel--min .dgca-panel-min-btn {
+                transform: rotate(-180deg);
+            }
             .dgca-panel-row-count { font-size: 10px; color: #8bc34a; font-weight: 600; }
             .dgca-select-hint {
                 font-size: 10px; color: #cfa93a; font-weight: 600;
@@ -590,15 +783,23 @@
             .dgca-panel-actions { display: flex; gap: 5px; }
             .dgca-panel-actions .dgca-send-btn,
             .dgca-panel-actions .dgca-clear-queue-btn {
-                flex: 1; border: none; border-radius: 5px; padding: 5px 6px;
+                flex: 1; border: none; border-radius: 6px; padding: 5px 6px;
                 font-size: 10px; font-weight: 600; cursor: pointer;
-                transition: opacity .15s, filter .15s;
+                transition: opacity .15s, filter .15s, transform .15s var(--dgca-ease), box-shadow .15s ease;
             }
             .dgca-panel-actions button:disabled { opacity: .4; cursor: not-allowed; }
-            .dgca-panel-actions button:not(:disabled):hover { filter: brightness(1.15); }
-            .dgca-send-btn { background: #4fc3f7; color: #0a0a14; }
+            .dgca-panel-actions button:not(:disabled):hover {
+                filter: brightness(1.15); transform: translateY(-1px);
+                box-shadow: 0 3px 10px rgba(0,0,0,.3);
+            }
+            .dgca-panel-actions button:not(:disabled):active { transform: translateY(0) scale(.96); }
+            .dgca-send-btn { background: linear-gradient(135deg, #4fc3f7, #29b6f6); color: #0a0a14; }
             .dgca-clear-queue-btn {
                 background: #23233a; border: 1px solid #4a4a6e !important; color: #cfd3e0;
+            }
+            @keyframes dgca-panel-status-in {
+                from { opacity: 0; transform: translateY(-4px); }
+                to   { opacity: 1; transform: translateY(0); }
             }
             .dgca-status-msg {
                 font-size: 10px; font-weight: 600; line-height: 1.3;
@@ -607,80 +808,14 @@
             .dgca-status-msg--success {
                 background: #1a3320; border: 1px solid #2e6b3e;
                 color: #8ee6a0; display: block;
+                animation: dgca-panel-status-in .22s var(--dgca-ease);
             }
             .dgca-status-msg--error {
                 background: #3a1f1f; border: 1px solid #6b2e2e;
                 color: #f28b82; display: block;
+                animation: dgca-panel-status-in .22s var(--dgca-ease);
             }
-            .dgca-panel--dragging { opacity: .9; }
             .dgca-panel--hidden { display: none !important; }
-
-            /* Info (ⓘ) popover — appended to <body> (not the panel) so it
-               isn't clipped by the panel's overflow:hidden, and positioned
-               in JS relative to the info button. */
-            .dgca-panel-info-popover {
-                position: fixed; z-index: 999999;
-                width: 220px; max-width: calc(100vw - 16px);
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-                background: #16213e; color: #cfd3e0;
-                border: 1px solid #2a3a5e; border-radius: 8px;
-                box-shadow: 0 4px 16px rgba(0,0,0,.4);
-                padding: 10px 12px; font-size: 11px; line-height: 1.5;
-                display: none;
-            }
-            .dgca-panel-info-popover--open { display: block; }
-            .dgca-panel-info-notice {
-                display: flex; gap: 6px; align-items: flex-start;
-                color: #f0c674; font-weight: 600; margin-bottom: 8px;
-            }
-            .dgca-panel-info-links a {
-                display: flex; align-items: center; justify-content: center;
-                gap: 6px;
-                padding: 7px 10px;
-                background: rgba(79, 195, 247, 0.12);
-                border: 1px solid rgba(79, 195, 247, 0.45);
-                border-radius: 6px;
-                color: #7fd4ff; font-weight: 600; font-size: 11px;
-                text-decoration: none; text-align: center;
-                transition: background .15s, border-color .15s, color .15s;
-            }
-            .dgca-panel-info-links a:hover {
-                background: rgba(79, 195, 247, 0.22);
-                border-color: #4fc3f7;
-                color: #fff;
-            }
-            .dgca-panel-info-links a .dgca-panel-info-arrow {
-                transition: transform .15s;
-            }
-            .dgca-panel-info-links a:hover .dgca-panel-info-arrow {
-                transform: translateX(2px);
-            }
-            .dgca-panel-info-credit {
-                margin-top: 9px; padding-top: 8px; border-top: 1px solid #2a3a5e;
-                text-align: center; font-size: 10px; color: #bdbdd7;
-            }
-            /* Same shimmer technique as the popup footer credit
-               (popup.css .shimmer-text / .shimmer-text--footer). */
-            .dgca-panel-info-credit .shimmer-text {
-                --shimmer-base: #4fc3f7; --shimmer-hi: #ffffff;
-                background-image: linear-gradient(90deg,
-                    var(--shimmer-base) 0%, var(--shimmer-base) 40%,
-                    var(--shimmer-hi) 50%,
-                    var(--shimmer-base) 60%, var(--shimmer-base) 100%);
-                background-size: 300% 100%;
-                background-repeat: no-repeat;
-                -webkit-background-clip: text;
-                background-clip: text;
-                -webkit-text-fill-color: transparent;
-                color: transparent;
-                display: inline-block;
-                font-weight: 600;
-                animation: dgca-panel-shimmer-text 7s linear infinite;
-            }
-            @keyframes dgca-panel-shimmer-text {
-                from { background-position: 100% 0; }
-                to   { background-position: 0% 0; }
-            }
         `;
         document.head.appendChild(style);
     }
@@ -712,6 +847,16 @@
         };
     }
 
+    // Dragging used to write panel.style.left/top on every pointermove,
+    // which forces a synchronous layout recalculation each frame (left/top
+    // on a position:fixed element are layout-affecting properties). Instead,
+    // the panel is left pinned at its last committed left/top and dragging
+    // moves it purely via `transform: translate3d(...)`, a compositor-only
+    // property that doesn't trigger layout or paint — smoother motion with
+    // far less main-thread work while the pointer is down, at any queue
+    // size. The transform delta is folded back into left/top exactly once,
+    // on pointerup, so the rest of the panel's logic (clampPanelPos,
+    // savePanelPos, initial positioning) keeps working in plain px terms.
     function makePanelDraggable(panel, header) {
         let dragging = false, startX = 0, startY = 0, startLeft = 0, startTop = 0;
         header.addEventListener('pointerdown', e => {
@@ -727,19 +872,23 @@
             if (!dragging) return;
             const { left, top } = clampPanelPos(panel,
                 startLeft + (e.clientX - startX), startTop + (e.clientY - startY));
-            panel.style.left = `${left}px`;
-            panel.style.top = `${top}px`;
-            panel.style.right = 'auto';
-            panel.style.bottom = 'auto';
+            panel.style.transform = `translate3d(${left - startLeft}px, ${top - startTop}px, 0)`;
         });
         const stopDrag = () => {
             if (!dragging) return;
             dragging = false;
             panel.classList.remove('dgca-panel--dragging');
-            savePanelPos({
-                left: parseFloat(panel.style.left) || 0,
-                top: parseFloat(panel.style.top) || 0
-            });
+            // Fold the transform offset back into left/top once, then clear
+            // the transform, so the panel's resting state is expressed the
+            // same way it always was (and clampPanelPos/positioning on the
+            // next load keep working unchanged).
+            const rect = panel.getBoundingClientRect();
+            panel.style.transform = '';
+            panel.style.left = `${rect.left}px`;
+            panel.style.top = `${rect.top}px`;
+            panel.style.right = 'auto';
+            panel.style.bottom = 'auto';
+            savePanelPos({ left: rect.left, top: rect.top });
         };
         header.addEventListener('pointerup', stopDrag);
         header.addEventListener('pointercancel', stopDrag);
@@ -750,68 +899,6 @@
         const btn = panel.querySelector('.dgca-panel-min-btn');
         if (btn) { btn.textContent = min ? '▢' : '—'; btn.title = min ? 'Expand' : 'Minimize'; }
         savePanelMinimized(min);
-    }
-
-    // ── NEW: "ⓘ" info popover — unofficial-extension notice + credit ──
-    // PLACEHOLDER: swap in the real Chrome Web Store URL once the official
-    // extension is published.
-    const OFFICIAL_EXTENSION_URL = 'https://chromewebstore.google.com/detail/egca-atc-logbook-autofill/fdhkbilacfkbfgghadoeefcblipnlhgd';
-
-    function buildInfoPopover() {
-        const existing = document.getElementById('dgca-info-popover');
-        if (existing) return existing;
-
-        const pop = document.createElement('div');
-        pop.id = 'dgca-info-popover';
-        pop.className = 'dgca-panel-info-popover';
-        pop.innerHTML = `
-            <div class="dgca-panel-info-notice">⚠ This is <strong>not</strong> the official extension.</div>
-            <div class="dgca-panel-info-links">
-                <a href="${OFFICIAL_EXTENSION_URL}" target="_blank" rel="noopener noreferrer">
-                    🔗 Official eLogBook Extension <span class="dgca-panel-info-arrow">→</span>
-                </a>
-            </div>
-            <div class="dgca-panel-info-credit">
-                Made with ❤️ by <span class="shimmer-text">Gaurav Chetiwal</span>
-            </div>
-        `;
-        document.body.appendChild(pop);
-        return pop;
-    }
-
-    function positionInfoPopover(pop, anchorBtn) {
-        const margin = 8;
-        const rect = anchorBtn.getBoundingClientRect();
-        pop.style.visibility = 'hidden';
-        pop.style.display = 'block';
-        const popRect = pop.getBoundingClientRect();
-
-        let left = rect.right - popRect.width;
-        left = Math.min(Math.max(left, margin), window.innerWidth - popRect.width - margin);
-
-        let top = rect.bottom + 6;
-        if (top + popRect.height > window.innerHeight - margin) {
-            top = rect.top - popRect.height - 6; // flip above if no room below
-        }
-        top = Math.max(top, margin);
-
-        pop.style.left = `${left}px`;
-        pop.style.top = `${top}px`;
-        pop.style.visibility = 'visible';
-    }
-
-    function closeInfoPopover(pop) {
-        pop.classList.remove('dgca-panel-info-popover--open');
-        pop.style.display = 'none';
-    }
-
-    function toggleInfoPopover(pop, anchorBtn) {
-        if (pop.classList.contains('dgca-panel-info-popover--open')) {
-            closeInfoPopover(pop);
-            return;
-        }
-        positionInfoPopover(pop, anchorBtn);
-        pop.classList.add('dgca-panel-info-popover--open');
     }
 
     function showStatus(text, kind) {
@@ -832,7 +919,7 @@
         }
     }
 
-    // ── CHANGED: Panel includes ☑ All / ☐ None buttons ───────────────
+    // ── Floating panel ───────────────────────────────────────────────
     function buildPanel() {
         const panel = document.createElement('div');
         panel.id = 'dgca-panel';
@@ -842,8 +929,6 @@
             <div class="dgca-panel-header" id="dgca-panel-header">
                 <span class="dgca-panel-title">✈ eLogBook Assist Extension</span>
                 <div class="dgca-panel-controls">
-                    <button type="button" class="dgca-panel-iconbtn dgca-panel-info-btn"
-                        title="About this extension">ⓘ</button>
                     <button type="button" class="dgca-panel-iconbtn dgca-panel-min-btn"
                         title="Minimize">—</button>
                 </div>
@@ -887,23 +972,6 @@
         });
         setPanelMinimized(panel, loadPanelMinimized());
 
-        // Info popover — lives outside the panel (appended to <body>) so
-        // its overflow isn't clipped by .dgca-panel { overflow: hidden }.
-        const infoBtn = panel.querySelector('.dgca-panel-info-btn');
-        const infoPopover = buildInfoPopover();
-        infoBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            toggleInfoPopover(infoPopover, infoBtn);
-        });
-        document.addEventListener('click', (e) => {
-            if (!infoPopover.classList.contains('dgca-panel-info-popover--open')) return;
-            if (e.target.closest('#dgca-info-popover') || e.target.closest('.dgca-panel-info-btn')) return;
-            closeInfoPopover(infoPopover);
-        });
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') closeInfoPopover(infoPopover);
-        });
-
         panel.querySelector('#dgca-send-btn').addEventListener('click', onImportClick);
         panel.querySelector('#dgca-clear-queue-btn').addEventListener('click', clearQueue);
         panel.querySelector('#dgca-sel-all-btn').addEventListener('click', selectAllRows);
@@ -915,9 +983,6 @@
             if (panel.style.left) {
                 panel.style.left = `${left}px`;
                 panel.style.top = `${top}px`;
-            }
-            if (infoPopover.classList.contains('dgca-panel-info-popover--open')) {
-                positionInfoPopover(infoPopover, infoBtn);
             }
         });
 
@@ -934,83 +999,85 @@
         refreshUserMismatchIndicator();
         refreshRowCountBadge();
 
-        window.DGCA_STORAGE.onChanged((changes, area) => {
-            if (area === 'session' &&
+        chrome.storage.local.onChanged.addListener((changes, area) => {
+            if (area === 'local' &&
                 (changes.dgca_pending_rows || changes.dgca_queue_user || changes.dgca_session_running)) {
                 refreshUserMismatchIndicator();
             }
         });
     }
 
-    function showBlockedNotice() {
-        if (document.getElementById('dgca-blocked-notice')) return;
-        const notice = document.createElement('div');
-        notice.id = 'dgca-blocked-notice';
-        notice.style.cssText =
-            'position:fixed; top:12px; right:12px; z-index:999999; max-width:360px;' +
-            'background:#fff3cd; color:#664d03; border:1px solid #ffe69c; border-radius:6px;' +
-            'padding:10px 28px 10px 14px; font-size:13px; font-family:sans-serif;' +
-            'box-shadow:0 2px 8px rgba(0,0,0,.15);';
-        notice.innerHTML = `
-            <button type="button" id="dgca-blocked-notice-close" title="Dismiss"
-                aria-label="Dismiss"
-                style="position:absolute;top:2px;right:4px;width:22px;height:22px;
-                background:none;border:none;font-size:16px;line-height:1;color:#664d03;
-                cursor:pointer;padding:0;">×</button>
-            <strong>⚠ DGCA Injector Blocked</strong><br>
-            The site is removing extension elements from the page.
-            Please try the official IAMATC Extension if this continues.`;
-        document.body.appendChild(notice);
-        notice.querySelector('#dgca-blocked-notice-close')
-            .addEventListener('click', () => notice.remove());
+    // ── Preview table observer ─────────────────────────────────────────
+    // Watch the table for portal re-renders and use a small parent observer
+    // to detect when the table element itself is replaced or removed.
+    function setupTableObserver() {
+        let table = null;
+        let tableObs = null;
+        let parentObs = null;
+        let timer = null;
+        let lastSig = '';
+
+        const scheduleRefresh = () => {
+            clearTimeout(timer);
+            timer = setTimeout(() => {
+                const current = document.getElementById('csvPreviewTable') || document.querySelector('table');
+                if (!current) return;
+                if (current !== table) attach(current);
+
+                const tbody = current.tBodies?.[0];
+                const rowCount = tbody?.rows?.length || 0;
+                const firstCell = tbody?.rows?.[0]?.cells?.[0];
+                const sig = `${rowCount}|${firstCell?.textContent?.slice(0, 20) || ''}`;
+
+                ensurePreviewButtonShimmer();
+                if (sig !== lastSig) {
+                    lastSig = sig;
+                    invalidateTableCache(current);
+                    refreshRowCountBadge();
+                } else {
+                    enableFallbackSelection(current);
+                }
+            }, 60);
+        };
+
+        const attach = (nextTable) => {
+            if (!nextTable || nextTable === table) return;
+            if (tableObs) tableObs.disconnect();
+            if (parentObs) parentObs.disconnect();
+
+            table = nextTable;
+            invalidateTableCache(table);
+            lastSig = '';
+
+            tableObs = new MutationObserver(() => scheduleRefresh());
+            tableObs.observe(table, { childList: true, subtree: true });
+
+            const parent = table.parentElement;
+            if (parent) {
+                parentObs = new MutationObserver(() => {
+                    const current = document.getElementById('csvPreviewTable') || document.querySelector('table');
+                    if (current !== table) {
+                        attach(current);
+                        scheduleRefresh();
+                    }
+                });
+                parentObs.observe(parent, { childList: true });
+            }
+        };
+
+        const initial = document.getElementById('csvPreviewTable') || document.querySelector('table');
+        if (initial) attach(initial);
+        scheduleRefresh();
     }
 
-    function checkInjectionSurvived() {
-        setTimeout(() => {
-            if (!document.getElementById('dgca-panel')) showBlockedNotice();
-        }, 500);
-    }
-
-    // ── CHANGED: Enhanced table observer ──────────────────────────────
+    // ── Setup ─────────────────────────────────────────────────────────
     function setup() {
         injectShimmerStyle();
         injectPanelStyle();
         injectCheckboxStyle();
         ensurePreviewButtonShimmer();
         ensurePanelInjected();
-        checkInjectionSurvived();
-
-        // Debounced observer: detects the table appearing or its rows
-        // changing (e.g. after "Generate Preview"), and re-applies
-        // click-to-select behaviour, including to any rows that lost
-        // their .dgca-row-clickable class/listener.
-        let _tableObsTimer = null;
-        let _lastTbodySig = '';
-
-        const obs = new MutationObserver(() => {
-            clearTimeout(_tableObsTimer);
-            _tableObsTimer = setTimeout(() => {
-                ensurePreviewButtonShimmer();
-                const table = document.querySelector('table');
-                if (!table) return;
-
-                const tbody = table.querySelector('tbody');
-                const rowCount = tbody ? tbody.querySelectorAll('tr').length : 0;
-                const firstCell = tbody?.querySelector('tr td');
-                const sig = `${rowCount}|${firstCell?.textContent?.slice(0, 20) || ''}`;
-
-                if (sig !== _lastTbodySig) {
-                    // Table content changed (new rows after "Generate Preview")
-                    _lastTbodySig = sig;
-                    refreshRowCountBadge();
-                } else {
-                    // Same rows — re-wire any rows missing the clickable class
-                    // (e.g. DOM was partially re-rendered by the page).
-                    enableFallbackSelection(table);
-                }
-            }, 150);
-        });
-        obs.observe(document.body, { childList: true, subtree: true });
+        setupTableObserver();
     }
 
     if (document.readyState === 'loading')

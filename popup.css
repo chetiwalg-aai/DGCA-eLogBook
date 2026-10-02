@@ -6,10 +6,23 @@
 	padding: 0;
 }
 
+:root {
+	--ease: cubic-bezier(0.16, 1, 0.3, 1);
+	--ease-in: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*, *::before, *::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+	}
+}
+
 body {
 	font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 	font-size: 13px;
-	background: #0f0f1a;
+	background: radial-gradient(140% 100% at 0% 0%, #14142a 0%, #0f0f1a 60%);
 	color: #e0e0e0;
 	width: 300px;
 }
@@ -78,6 +91,11 @@ header {
 	animation-duration: 7s;
 }
 
+@keyframes pop-in {
+	from { opacity: 0; transform: translateY(-4px) scale(0.96); }
+	to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
 .badge {
 	font-size: 11px;
 	font-weight: 600;
@@ -85,6 +103,8 @@ header {
 	border-radius: 999px;
 	text-transform: uppercase;
 	letter-spacing: 0.5px;
+	transition: background .2s ease, color .2s ease;
+	animation: pop-in .25s var(--ease);
 }
 
 .badge--idle {
@@ -95,6 +115,7 @@ header {
 .badge--queued {
 	background: #2d4a1e;
 	color: #8bc34a;
+	box-shadow: 0 0 0 3px rgba(139, 195, 74, 0.12);
 }
 
 .update-banner {
@@ -106,10 +127,11 @@ header {
 	padding: 8px 12px;
 	background: #1a3320;
 	border: 1px solid #2e6b3e;
-	border-radius: 8px;
+	border-radius: 10px;
 	color: #8ee6a0;
 	font-size: 12px;
 	font-weight: 600;
+	animation: pop-in .28s var(--ease);
 }
 
 .hint {
@@ -122,9 +144,10 @@ header {
 .card {
 	background: #1e1e2e;
 	border: 1px solid #2a2a3e;
-	border-radius: 8px;
+	border-radius: 10px;
 	padding: 12px 14px;
 	margin: 10px 12px 0;
+	transition: border-color .2s ease;
 }
 
 .queue-info {
@@ -167,11 +190,11 @@ header {
 .btn {
 	padding: 7px 14px;
 	border: none;
-	border-radius: 6px;
+	border-radius: 7px;
 	font-size: 13px;
 	font-weight: 600;
 	cursor: pointer;
-	transition: opacity 0.15s, filter 0.15s;
+	transition: opacity .15s, filter .15s, transform .15s var(--ease), box-shadow .15s ease;
 	width: 100%;
 }
 
@@ -182,10 +205,17 @@ header {
 
 .btn:not(:disabled):hover {
 	filter: brightness(1.15);
+	transform: translateY(-1px);
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.btn:not(:disabled):active {
+	transform: translateY(0) scale(0.97);
+	transition-duration: .08s;
 }
 
 .btn--primary {
-	background: #4fc3f7;
+	background: linear-gradient(135deg, #4fc3f7, #29b6f6);
 	color: #0a0a14;
 }
 

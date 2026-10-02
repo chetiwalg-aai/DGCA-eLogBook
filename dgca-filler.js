@@ -1,2332 +1,1138 @@
 /**
-dgca-filler.js
-Runs on: https://www.dgca.gov.in/*
-
-Injects a toolbar on the DGCA e-Log Book entry page that reads the shared
-row queue (built on the AAI EGCA-export page by injector-egcaexport.js),
-lets the user review/reorder/delete rows, and fills the entry form for each
-queued row one at a time. All dropdowns are matched by their exact visible
-text against the raw values captured from the EGCA export table — no static
-value maps needed.
-*/
+ * DGCA e-LogBook queue filler — lean build.
+ * Keeps the queue workflow and portal behavior, but removes nonessential UI,
+ * animation, timing telemetry, repeated DOM lookup, and repeated station XHRs.
+ */
 (function () {
 	'use strict';
-	const { parseDateDMY, formatDDMMYYYY, sleep, addOneDay, namesMatch, escHtml } = window.DGCA;
 
-	// ── Shared selectors ────────────────────────────────────────────────────
+	const { parseDateDMY, formatDDMMYYYY, sleep, addOneDay, namesMatch, escHtml, ROW_STATUS } = window.DGCA;
+
 	const SEL = {
-		briefingCheckbox: '#isbriefingDone',
+		briefing: '#isbriefingDone',
 		fromDate: '#logBookDate',
 		toDate: '#logBookEndDate',
 		postingStation: '#postingStation',
-		wsoEgcaId: '#atStoEgcaId',
-		ratingId: '#ratingId',
-		atsUnitId: '#atsUnitId',
-		remarksField: '#ratingAndAtsRemarks',
-		typeOfDutyId: '#typeOfDutyId',
-		ojtFieldsDiv: '#ojtFields',
-		ojtEnv: '#ojtOprEnvSmlation',
-		ojtTrainerName: '#ojtTrainerName',
-		examinerLicNumDiv: '#examinerLicenseNumberDiv',
-		examinerAtcol: '#examinerLicenseNumber',
-		traineeLicNumDiv: '#traineeLicenseNumberDiv',
-		traineeAtcol: '#traineeLicenseNumber',
-		isProficiency: '#isProficiencyChecked',
-		isTheoryClasses: '#isTheoryClasses',
-		isSkillTest: '#isSkillTestChecked',
-		isOjtProvided: '#isOjtProvided',
+		icao: '#letterIcaoCode',
+		wso: '#atStoEgcaId',
+		rating: '#ratingId',
+		atsUnit: '#atsUnitId',
+		remarks: '#ratingAndAtsRemarks',
+		duty: '#typeOfDutyId',
+		ojtf: '#ojtFields',
+		ojtenv: '#ojtOprEnvSmlation',
+		trainer: '#ojtTrainerName',
+		trainerName: '#nameOfInstructor',
+		examinerDiv: '#examinerLicenseNumberDiv',
+		examiner: '#examinerLicenseNumber',
+		traineeDiv: '#traineeLicenseNumberDiv',
+		trainee: '#traineeLicenseNumber',
+		proficiency: '#isProficiencyChecked',
+		theory: '#isTheoryClasses',
+		skill: '#isSkillTestChecked',
+		ojtProvided: '#isOjtProvided',
 		startTime: '#ojtStartTime',
 		endTime: '#ojtEndTime',
-		addButton: '#btnAddanssTrnTrainingDtlsVOList',
+		add: '#btnAddanssTrnTrainingDtlsVOList',
+		totalDuration: '#totalDuration',
+		isAtsUnitChecked: '#isAtsUnitChecked',
+		newlyEstablisAtstsation: '#newlyEstablisAtstsation',
+		reset: '#btnResetanssTrnTrainingDtlsVOList',
 		resultTable: '#anssELogBookDtlsVOList',
-		// Portal's own global AJAX-busy indicator. showProgressbar()/
-		// hideProgressbar() (statusbar.js) are the only things that toggle
-		// this element's visibility — set to 'visible' when a request starts,
-		// 'hidden' when it finishes. That's the single source of truth; the
-		// element's own #imgtd/#statuBarTd1 children are not (see comment on
-		// isStatusbarIdle below).
+		counter: '#anssELogBookDtlsVOListcounter',
 		statusbar: '#statusbar',
 	};
 
-	// injector-egcaexport.js (the AAI-side script that builds the queue)
-	// stores each row flat, keyed by the EGCA table's own header names —
-	// row['FROM_DATE'], row['POSTING_STATION'], row['TYPE_OF_DUTY'], etc.
-	// fillRow()/buildRowItemHtml() below read those keys directly (via
-	// `raw['HEADER_NAME']`) rather than through a translated camelCase copy,
-	// so a header rename/addition on the EGCA export table only needs
-	// updating here, not in a separate mapping layer.
+	const ALERT_EVENT = 'dgca_alert_captured';
+	const SESSION_EVENT = 'dgca_session_state_changed';
+	const refs = Object.create(null);
+	const stationCache = new Map();
+	let alertNodes = null;
+	let lastAlert = null;
+	let sessionRunning = false;
+	let aborted = false;
+	let toolbarEls = null;
+	let toolbarHeading = null;
+	let observerScheduled = false;
+	let refreshSeq = 0;
+	let rowEls = [];
+	let activeRowIndex = -1;
 
-	// ── Alert capture (fed by alert-interceptor.js in the MAIN world) ──────
-	const ALERT_EVENT_NAME = 'dgca_alert_captured';
-	let _lastCapturedAlert = null;
-
-	window.addEventListener(ALERT_EVENT_NAME, (e) => {
-		_lastCapturedAlert = e.detail.msg;
+	window.addEventListener(ALERT_EVENT, e => {
+		lastAlert = e.detail?.msg || null;
 	});
 
-	// ── Session state broadcast (consumed by alert-interceptor.js in the
-	// MAIN world) — tells it whether native alert()/confirm()/prompt() should
-	// be suppressed (auto-handled during automation) or passed through to the
-	// real dialog (manual entry, nothing queued/running). Must match
-	// SESSION_EVENT_NAME in alert-interceptor.js.
-	const SESSION_STATE_EVENT = 'dgca_session_state_changed';
+	function syncToolbarSessionState() {
+		if (!toolbarEls) return;
+		const running = sessionRunning;
+		toolbarEls.start.disabled = running;
+		toolbarEls.start.style.display = running ? 'none' : '';
+		toolbarEls.abort.style.display = running ? 'inline-block' : 'none';
+		toolbarEls.clearDone.disabled = running;
+		toolbarEls.clearAll.disabled = running;
+		toolbarEls.wsoAts.disabled = running;
+		toolbarEls.wsoCustom.disabled = running || !toolbarEls.wsoCustomMode.checked;
+	}
+
 	function notifySessionState(running) {
+		sessionRunning = !!running;
+		syncToolbarSessionState();
 		try {
-			const detail = { running: !!running };
-			// Firefox wraps objects created by an isolated-world content
-			// script in an Xray wrapper, so the page's MAIN-world listener
-			// (alert-interceptor.js) can see the event fire but can't read
-			// properties off `detail` — it comes through as effectively
-			// undefined, so _sessionRunning there never flips and native
-			// dialogs never get auto-dismissed. cloneInto() (a Firefox-only
-			// content-script global — absent in Chrome, hence the feature
-			// check) makes a plain clone in the page's own scope that it
-			// can read normally. Chrome has no such restriction and no
-			// cloneInto, so it just uses the object as-is.
-			const eventDetail = (typeof cloneInto === 'function')
-				? cloneInto(detail, window)
-				: detail;
-			window.dispatchEvent(new CustomEvent(SESSION_STATE_EVENT, { detail: eventDetail }));
+			const detail = { running: sessionRunning };
+			const d = typeof cloneInto === 'function' ? cloneInto(detail, window) : detail;
+			window.dispatchEvent(new CustomEvent(SESSION_EVENT, { detail: d }));
 		} catch (_) { }
-		document.getElementById('dgca-ext-toolbar')?.classList.toggle('dgca-ext-toolbar--session-running', !!running);
-		// Persisted (not just an in-page event) so the popup and the
-		// EGCA-export injector — separate tabs/contexts that can't see this
-		// page's window events — can also lock out queue mutation (Clear
-		// All / Add to Queue / Clear Queue) while a fill session is active.
-		window.DGCA_STORAGE.set({ dgca_session_running: !!running }).catch(() => { });
+		chrome.storage.local.set({ dgca_session_running: sessionRunning }).catch(() => { });
 	}
 
 	function detectAlert() {
-		if (_lastCapturedAlert) {
-			const msg = _lastCapturedAlert;
-			_lastCapturedAlert = null;
-			return msg;
+		const msg = lastAlert;
+		lastAlert = null;
+		return msg;
+	}
+
+	function el(key) {
+		const current = refs[key];
+		if (current?.isConnected) return current;
+		const selector = SEL[key];
+		if (!selector) return null;
+		const found = document.querySelector(selector);
+		if (found) refs[key] = found;
+		return found;
+	}
+
+	function cacheFormRefs() {
+		for (const key of Object.keys(SEL)) el(key);
+		if (!alertNodes || (alertNodes.length && !alertNodes[0].isConnected)) alertNodes = document.querySelectorAll('[id^="alert_"]');
+	}
+
+	async function pollFor(check, timeout, message) {
+		const deadline = Date.now() + timeout;
+		let wait = 4;
+		for (; ;) {
+			const value = check();
+			if (value) return value;
+			if (Date.now() >= deadline) throw new Error(message);
+			await sleep(wait);
+			if (wait < 64) wait *= 2;
 		}
-		const selectors = ['.swal2-popup:not(.swal2-toast)', '.modal.show', '.alertmsg:not([id^="alert_"]):not(:empty)', '.alert-danger:not(:empty)', '.error-msg:not(:empty)'];
-		for (const sel of selectors) {
-			const el = document.querySelector(sel);
-			if (el && getComputedStyle(el).display !== 'none') {
-				const txt = el.innerText?.trim();
-				if (txt && txt.length < 500) return txt;
+	}
+
+	async function waitForElement(key, timeout = 10000) {
+		return pollFor(() => el(key), timeout, `Timeout waiting for ${key}`);
+	}
+
+	async function waitForValue(key, timeout = 10000) {
+		return pollFor(() => {
+			const node = el(key);
+			return node && String(node.value || '').trim() ? node : null;
+		}, timeout, `Timeout waiting for value in ${key}`);
+	}
+
+	async function waitForVisible(key, timeout = 8000) {
+		return pollFor(() => {
+			const node = el(key);
+			if (!node) return null;
+			if (node.offsetParent !== null) return node;
+			return getComputedStyle(node).display !== 'none' ? node : null;
+		}, timeout, `Timeout waiting for ${key} to become visible`);
+	}
+
+	function waitForOptions(key, timeout = 12000) {
+		return pollFor(() => {
+			const node = el(key);
+			if (!node) return null;
+			for (const option of node.options) {
+				if (option.value && option.value !== '-1') return node;
 			}
-		}
-		return null;
+			return null;
+		}, timeout, `Timeout waiting for options in ${key}`);
 	}
 
-	async function dismissModals() {
-		if (window.Swal && typeof window.Swal.close === 'function') {
-			try { window.Swal.close(); } catch (_) { }
-		}
-		document.querySelector('.swal2-confirm')?.click();
-		document.querySelectorAll('.modal.show, .modal[style*="display: block"]').forEach(m => { m.style.display = 'none'; m.classList.remove('show'); });
-		document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
-		document.body.classList.remove('modal-open');
-		document.body.style.overflow = '';
-		document.body.style.paddingRight = '';
-		await sleep(200);
-	}
-
-	async function waitForSelector(sel, timeout = 10000) {
-		const deadline = Date.now() + timeout;
-		while (Date.now() < deadline) {
-			const el = document.querySelector(sel);
-			if (el) return el;
-			await sleep(80);
-		}
-		throw new Error(`Timeout waiting for element: ${sel}`);
-	}
-
-	async function waitForSelectOptions(sel, timeout = 12000) {
-		const deadline = Date.now() + timeout;
-		while (Date.now() < deadline) {
-			const el = document.querySelector(sel);
-			if (el) {
-				const real = Array.from(el.options).filter(o => o.value && o.value !== '-1');
-				if (real.length > 0) return el;
+	function waitForOptionValue(key, value, timeout = 10000) {
+		return pollFor(() => {
+			const node = el(key);
+			if (!node) return null;
+			for (const option of node.options) {
+				if (option.value === value) return node;
 			}
-			await sleep(120);
-		}
-		throw new Error(`Timeout waiting for options in: ${sel}`);
+			return null;
+		}, timeout, `Option value "${value}" not found in ${key}`);
 	}
 
-	async function waitForOptionValue(sel, value, timeout = 10000) {
-		const deadline = Date.now() + timeout;
-		while (Date.now() < deadline) {
-			const el = document.querySelector(sel);
-			if (el) {
-				const opt = Array.from(el.options).find(o => o.value === value);
-				if (opt) return el;
-			}
-			await sleep(120);
-		}
-		throw new Error(`Option value "${value}" never appeared in ${sel}`);
+	function normText(value) {
+		return String(value || '').replace(/\s+/g, ' ').trim().toUpperCase();
 	}
 
-	async function waitForVisible(sel, timeout = 8000) {
-		const deadline = Date.now() + timeout;
-		while (Date.now() < deadline) {
-			const el = document.querySelector(sel);
-			if (el && getComputedStyle(el).display !== 'none') return el;
-			await sleep(80);
+	function findOptionByText(select, text) {
+		const target = normText(text);
+		let loose = null;
+		for (const option of select.options) {
+			if (!option.value || option.value === '-1') continue;
+			const label = normText(option.text);
+			if (label === target) return option;
+			if (!loose && (label.includes(target) || target.includes(label))) loose = option;
 		}
-		throw new Error(`Timeout waiting for element to become visible: ${sel}`);
+		return loose;
 	}
 
-	async function waitForFieldValue(selector, timeout = 10000) {
-		const deadline = Date.now() + timeout;
-		while (Date.now() < deadline) {
-			const el = document.querySelector(selector);
-			if (el && el.value && el.value.trim() !== '') return el;
-			await sleep(100);
-		}
-		throw new Error(`Timeout waiting for value in: ${selector}`);
-	}
-
-	function _normText(s) {
-		return String(s || '').replace(/\s+/g, ' ').trim().toUpperCase();
-	}
-
-	/**
-	 * Select an option by matching its visible text rather than a pre-built
-	 * value map. Useful for EGCA-export sourced data, where the source table
-	 * already contains the exact human-readable label (posting station name,
-	 * rating name, etc.) that appears in the DGCA portal's own <option> text.
-	 *
-	 * Tries an exact (normalized) match first, then a loose contains-match
-	 * either direction, so minor formatting differences (extra spaces, a
-	 * trailing "AIRPORT" etc.) don't break it. Throws if nothing matches so
-	 * callers can fall back to a static map when needed.
-	 */
-	async function selectByText(selector, text) {
-		const el = await waitForSelector(selector);
-		const target = _normText(text);
-		if (!target) throw new Error(`selectByText: empty target text for ${selector}`);
-
-		const options = Array.from(el.options).filter(o => o.value && o.value !== '-1');
-		let match = options.find(o => _normText(o.text) === target);
-		if (!match) {
-			match = options.find(o => _normText(o.text).includes(target) || target.includes(_normText(o.text)));
-		}
-		if (!match) {
-			throw new Error(`selectByText: no option matching "${text}" in ${selector}`);
-		}
-
-		el.value = match.value;
-		el.dispatchEvent(new Event('change', { bubbles: true }));
-		el.dispatchEvent(new Event('input', { bubbles: true }));
+	function setSelectValue(node, value, fireChange = true, refresh = false) {
+		node.value = value;
 		if (window.jQuery) {
 			try {
-				const $el = window.jQuery(el);
-				if (typeof $el.selectpicker === 'function') {
-					$el.selectpicker('val', match.value);
-					$el.selectpicker('refresh');
+				const jq = window.jQuery(node);
+				if (typeof jq.selectpicker === 'function') {
+					jq.selectpicker('val', value);
+					if (refresh) jq.selectpicker('refresh');
 				}
 			} catch (_) { }
 		}
-		await sleep(150);
+		node.value = value;
+		if (fireChange) {
+			node.dispatchEvent(new Event('change', { bubbles: true }));
+			node.dispatchEvent(new Event('input', { bubbles: true }));
+		}
+	}
+
+	function selectOptionText(node, text) {
+		const match = findOptionByText(node, text);
+		if (!match) throw new Error(`No option matching "${text}"`);
+		setSelectValue(node, match.value, true, false);
 		return match.value;
 	}
 
-	async function selectByValue(selector, value) {
-		const el = await waitForOptionValue(selector, value);
-		el.value = value;
-		el.dispatchEvent(new Event('change', { bubbles: true }));
-		el.dispatchEvent(new Event('input', { bubbles: true }));
+	function selectOptionValue(node, value) {
+		setSelectValue(node, value, true, false);
+	}
+
+	function setOptions(node, options) {
+		const html = ['<option value="-1">--- Select ---</option>'];
+		for (const [value, text] of options) {
+			html.push(`<option value="${escHtml(value)}">${escHtml(text)}</option>`);
+		}
+		node.innerHTML = html.join('');
 		if (window.jQuery) {
 			try {
-				const $el = window.jQuery(el);
-				if (typeof $el.selectpicker === 'function') {
-					$el.selectpicker('val', value);
-					$el.selectpicker('refresh');
-				}
+				const jq = window.jQuery(node);
+				if (typeof jq.selectpicker === 'function') jq.selectpicker('refresh');
 			} catch (_) { }
 		}
-		await sleep(150);
 	}
 
-	async function setDatePickerValue(selector, dateStr) {
-		const el = await waitForSelector(selector);
-		el.value = dateStr;
-		el.dispatchEvent(new Event('input', { bubbles: true }));
-		el.dispatchEvent(new Event('change', { bubbles: true }));
-		el.dispatchEvent(new Event('blur', { bubbles: true }));
-		if (el.onblur) { try { el.onblur(); } catch (_) { } }
-		await sleep(100);
+	function captureStationCache() {
+		const station = el('postingStation');
+		const wso = el('wso');
+		const icao = el('icao');
+		if (!station || !wso) return;
+		stationCache.set(station.value, {
+			icao: icao?.value || '',
+			options: Array.from(wso.options, option => [option.value, option.text]),
+		});
 	}
 
-	async function typeIntoFieldAndVerify(selector, text, attempts = 4, settleMs = 250) {
-		const expected = String(text);
+	async function selectPostingStation(text) {
+		const node = await waitForElement('postingStation');
+		const match = findOptionByText(node, text);
+		if (!match) throw new Error(`No posting station matching "${text}"`);
+
+		const cached = stationCache.get(match.value);
+		if (cached) {
+			setSelectValue(node, match.value, false, false);
+			const icao = el('icao');
+			if (icao) icao.value = cached.icao;
+			const wso = el('wso');
+			if (wso) setOptions(wso, cached.options);
+			return;
+		}
+
+		setSelectValue(node, match.value, true, false);
+		await waitForValue('icao');
+		await waitForOptions('wso');
+		captureStationCache();
+	}
+
+	function setInput(key, value) {
+		const node = el(key);
+		if (!node) throw new Error(`Missing field: ${key}`);
+		const expected = String(value ?? '');
+		node.value = expected;
+		node.dispatchEvent(new Event('input', { bubbles: true }));
+		node.dispatchEvent(new Event('change', { bubbles: true }));
+		node.dispatchEvent(new Event('blur', { bubbles: true }));
+		if (expected.trim() && !node.value.trim()) {
+			const note = document.getElementById(`alert_${node.id}`);
+			throw new Error(`${key}: ${note?.textContent?.trim() || 'value rejected by portal'}`);
+		}
+		return node;
+	}
+
+	async function setInputVerified(key, value, attempts = 4) {
+		const expected = String(value ?? '');
+		const backoff = [0, 60, 180, 400];
 		for (let i = 0; i < attempts; i++) {
-			await typeIntoField(selector, expected);
-			await sleep(settleMs);
-			const el = document.querySelector(selector);
-			if (el && el.value === expected) return el;
-			console.warn(`[DGCA Filler] ${selector} reverted after write (attempt ${i + 1}/${attempts}): got "${el ? el.value : null}", expected "${expected}" — retrying`);
+			setInput(key, expected);
+			const wait = backoff[Math.min(i, backoff.length - 1)];
+			if (wait) await sleep(wait);
+			const node = el(key);
+			if (node?.value === expected) return node;
 		}
-		throw new Error(`${selector}: value would not stick to "${expected}" after ${attempts} attempts`);
+		throw new Error(`${key}: value would not stick`);
 	}
 
-	async function typeIntoField(selector, text) {
-		const el = await waitForSelector(selector);
-		el.value = '';
-		el.dispatchEvent(new Event('focus', { bubbles: true }));
-		await sleep(30);
-		el.value = String(text);
-		el.dispatchEvent(new Event('input', { bubbles: true }));
-		el.dispatchEvent(new Event('change', { bubbles: true }));
-		el.dispatchEvent(new Event('blur', { bubbles: true }));
-		if (el.onblur) { try { el.onblur(); } catch (_) { } }
-		await sleep(80);
+	function setDate(key, value) {
+		const node = el(key);
+		if (!node) throw new Error(`Missing field: ${key}`);
+		node.value = value;
+		node.dispatchEvent(new Event('input', { bubbles: true }));
+		node.dispatchEvent(new Event('change', { bubbles: true }));
+		node.dispatchEvent(new Event('blur', { bubbles: true }));
 	}
 
-	async function ensureCheckbox(selector, shouldBeChecked) {
-		const el = await waitForSelector(selector);
-		if (getComputedStyle(el).display === 'none') return;
-		if (el.checked !== shouldBeChecked) {
-			el.click();
-			await sleep(100);
+	function ensureCheckbox(key, checked) {
+		const node = el(key);
+		if (!node) return;
+		if (node.offsetParent === null && getComputedStyle(node).display === 'none') return;
+		if (node.checked !== checked) node.click();
+	}
+
+	function clearValidationMessages() {
+		if (!alertNodes || (alertNodes.length && !alertNodes[0].isConnected)) alertNodes = document.querySelectorAll('[id^="alert_"]');
+		for (const node of alertNodes) node.textContent = '';
+	}
+
+	function collectValidationMessages() {
+		if (!alertNodes || (alertNodes.length && !alertNodes[0].isConnected)) alertNodes = document.querySelectorAll('[id^="alert_"]');
+		const messages = [];
+		for (const node of alertNodes) {
+			const text = node.textContent?.trim();
+			if (text) messages.push(text);
 		}
+		return messages;
 	}
 
-	function countResultTableRows() {
-		const counter = document.querySelector('#anssELogBookDtlsVOListcounter');
+	function countRows() {
+		const counter = el('counter');
 		if (counter) {
-			const n = parseInt(counter.value, 10);
-			return isNaN(n) ? 0 : n;
+			const n = Number.parseInt(counter.value, 10);
+			if (Number.isFinite(n)) return n;
 		}
-		const tbl = document.querySelector(SEL.resultTable);
-		if (!tbl) return 0;
-		return tbl.querySelectorAll('tr[id^="row"]').length;
+		const table = el('resultTable');
+		return table ? table.querySelectorAll('tr[id^="row"]').length : 0;
 	}
 
-	async function resetFields() {
+	function resetFields() {
 		try {
-			_lastCapturedAlert = null;
-			await dismissModals();
-			const resetBtn = document.querySelector('#btnResetanssTrnTrainingDtlsVOList');
-			if (resetBtn) {
-				resetBtn.click();
-				await sleep(400);
-			} else {
-				for (const sel of [SEL.fromDate, SEL.toDate]) {
-					const el = document.querySelector(sel);
-					if (!el) continue;
-					el.value = '';
-					el.dispatchEvent(new Event('input', { bubbles: true }));
-					el.dispatchEvent(new Event('change', { bubbles: true }));
-				}
-				for (const sel of [SEL.startTime, SEL.endTime, SEL.examinerAtcol, SEL.traineeAtcol]) {
-					const el = document.querySelector(sel);
-					if (!el) continue;
-					el.value = '';
-					el.dispatchEvent(new Event('input', { bubbles: true }));
-					el.dispatchEvent(new Event('blur', { bubbles: true }));
-				}
-				await sleep(300);
-			}
+			lastAlert = null;
+			const reset = el('reset');
+			if (reset) reset.click();
 		} catch (_) { }
 	}
 
-	// ── Portal's global AJAX-busy indicator ──────────────────────────────────
-	// Clicking Add kicks off a server round-trip; the result table can update
-	// (optimistically, client-side) before that round-trip has actually
-	// finished on the server. If the next row's Add gets clicked while the
-	// server is still processing the previous one, the portal can't handle
-	// the overlapping request and that row errors out — even though nothing
-	// was wrong with its data. #imgtd/#statuBarTd1 (statusbar.js) are the
-	// portal's own busy indicator, so wait for those to go idle rather than
-	// trusting the row count alone.
-	// Verified against statusbar.js/.css: showProgressbar() sets
-	// #statusbar.style.visibility = 'visible' and disables the background;
-	// hideProgressbar() sets it back to 'hidden'. Those two functions are
-	// the only things that touch this element's visibility, so it's a
-	// reliable busy/idle signal — unlike #imgtd (a CSS background-image,
-	// never gets a spinner <img> child to detect) or #statuBarTd1 (its
-	// text-setting line is commented out in statusbar.js and the CSS keeps
-	// it display:none regardless, so it's effectively dead and never
-	// reflects busy state).
-	function isStatusbarIdle() {
-		const bar = document.querySelector(SEL.statusbar);
-		if (!bar) return true; // element not present — nothing to gate on
-		return getComputedStyle(bar).visibility !== 'visible';
+	function statusbarIdle() {
+		const bar = el('statusbar');
+		return !bar || (bar.style.visibility || '') !== 'visible';
 	}
 
-	async function waitForStatusbarIdle(timeout = 8000) {
-		// Give the framework a moment to actually flip into the busy state
-		// first — checking immediately after a click can catch the
-		// pre-request idle state and return instantly, defeating the point.
-		await sleep(150);
-		const startedAt = Date.now();
-		const deadline = startedAt + timeout;
-		while (Date.now() < deadline) {
-			if (isStatusbarIdle()) {
-				const waited = Date.now() - startedAt;
-				// Only log waits that actually cost meaningful time, so this
-				// doesn't spam the console on the common case where the
-				// portal was already idle. Useful for telling "genuinely
-				// slow server response" apart from "stuck at the timeout."
-				if (waited > 500) console.log(`[DGCA Filler] statusbar idle after ${waited}ms`);
-				return true;
-			}
-			await sleep(120);
-		}
-		// Timed out — the indicator may just not be wired the way we expect
-		// for this action, or the request is genuinely taking longer than
-		// `timeout`. Proceed rather than stalling the whole session; the
-		// existing row-count/alert checks are still the actual source of
-		// truth for whether the row was added.
-		console.warn(`[DGCA Filler] statusbar still busy after ${timeout}ms wait — proceeding anyway`);
-		return false;
+	function observeStatusbarIdle(timeout) {
+		return new Promise(resolve => {
+			const bar = el('statusbar');
+			if (!bar || statusbarIdle()) return resolve(true);
+			let done = false;
+			const finish = value => {
+				if (done) return;
+				done = true;
+				observer.disconnect();
+				clearTimeout(timer);
+				resolve(value);
+			};
+			const observer = new MutationObserver(() => {
+				if (statusbarIdle()) finish(true);
+			});
+			observer.observe(bar, { attributes: true, attributeFilter: ['style'] });
+			const timer = setTimeout(() => finish(false), timeout);
+		});
 	}
 
-	// Waits for the portal's busy indicator to actually appear after a
-	// click, rather than assuming it will. Mirrors isStatusbarIdle's caveat
-	// in reverse: some actions may not toggle #statusbar at all, so this
-	// times out and returns false instead of hanging if busy never shows.
-	async function waitForStatusbarBusy(timeout = 2000) {
-		const deadline = Date.now() + timeout;
-		while (Date.now() < deadline) {
-			if (!isStatusbarIdle()) return true;
-			await sleep(50);
-		}
-		return false;
+	async function waitForStatusbarIdle(timeout = 10000) {
+		return observeStatusbarIdle(timeout);
+	}
+
+	function armBusyWatch(timeout = 250) {
+		return new Promise(resolve => {
+			const bar = el('statusbar');
+			if (bar && !statusbarIdle()) return resolve(true);
+			if (!bar) return resolve(false);
+			let done = false;
+			const finish = value => {
+				if (done) return;
+				done = true;
+				observer.disconnect();
+				clearTimeout(timer);
+				resolve(value);
+			};
+			const observer = new MutationObserver(() => {
+				if (!statusbarIdle()) finish(true);
+			});
+			observer.observe(bar, { attributes: true, attributeFilter: ['style'] });
+			const timer = setTimeout(() => finish(false), timeout);
+		});
 	}
 
 	async function clickAddAndVerify() {
-		const rowsBefore = countResultTableRows();
-		const addBtn = await waitForSelector(SEL.addButton, 6000);
+		const before = countRows();
+		const button = await waitForElement('add', 6000);
+		lastAlert = null;
+		clearValidationMessages();
 
-		// NOTE: no pre-click wait here anymore. The previous call to this
-		// function already waits for idle right before it returns (below),
-		// and resetFields()/fillRow() run several of their own awaited
-		// steps in between — so by the time we get here the portal is
-		// already idle in the overwhelmingly common case, and paying the
-		// 150ms floor + poll cadence again here was pure overhead. If
-		// something outside this loop left it busy, the click below will
-		// simply queue behind it same as it always could.
+		const busyWatch = armBusyWatch();
+		button.click();
+		const wentBusy = statusbarIdle() ? await busyWatch : true;
 
-		_lastCapturedAlert = null;
-		addBtn.click();
-
-		// Mirror the page's real sequence: spinner appears first, then
-		// either a validation alert or the spinner clearing (with the row
-		// landing) resolves it. Confirming busy first means the alert/
-		// row-count check below is reacting to *this* click's request, not
-		// to stale state left over from before the click.
-		const wentBusy = await waitForStatusbarBusy();
 		if (!wentBusy) {
-			console.log('[DGCA Filler] statusbar never went busy after Add click — proceeding without it as a gate');
+			const alert = detectAlert();
+			if (alert) return { ok: false, error: `Portal validation error: ${alert}` };
+			const messages = collectValidationMessages();
+			if (messages.length) return { ok: false, error: `Portal rejected: ${messages.join('; ')}` };
 		}
 
-		// Poll for either a validation alert, or the statusbar going idle
-		// again with the row count having ticked up — whichever comes
-		// first. Both are checked in the same loop so neither has to wait
-		// out a separate fixed timeout before the other is noticed.
-		const POLL_MS = 150;
-		const FAST_POLL_MS = 4000;
-		const fastDeadline = Date.now() + FAST_POLL_MS;
-		let alertText = null;
-		let rowsAfter = rowsBefore;
-		let wentIdle = false;
-		while (Date.now() < fastDeadline) {
-			await sleep(POLL_MS);
-			alertText = await detectAlert();
-			if (alertText) break;
-			if (isStatusbarIdle()) {
-				wentIdle = true;
-				rowsAfter = countResultTableRows();
-				if (rowsAfter > rowsBefore) break;
+		const deadline = Date.now() + 4000;
+		let wait = 4;
+		for (; ;) {
+			const alert = detectAlert();
+			if (alert) {
+				await waitForStatusbarIdle(10000);
+				return { ok: false, error: `Portal validation error: ${alert}` };
 			}
-		}
-
-		if (alertText) {
-			await dismissModals();
-			await waitForStatusbarIdle();
-			return { ok: false, error: `Portal validation error: ${alertText}` };
-		}
-
-		if (!wentIdle || rowsAfter <= rowsBefore) {
-			// Either the statusbar hasn't cleared yet, or it cleared but the
-			// row count hasn't caught up within the fast-poll window. Rather
-			// than declaring failure off a fixed timeout, wait for idle
-			// explicitly — it can take longer than the fast-poll window on a
-			// loaded server. This is what previously produced "Row was not
-			// added" errors for rows that, in fact, did get added a moment
-			// later: the fixed window gave up before a slow response landed,
-			// and nothing checked again afterward.
-			await waitForStatusbarIdle(10000);
-			rowsAfter = countResultTableRows();
-
-			if (rowsAfter <= rowsBefore) {
-				const lateAlert = await detectAlert();
-				if (lateAlert) {
-					await dismissModals();
-					return { ok: false, error: `Portal validation error (late): ${lateAlert}` };
-				}
-				return { ok: false, error: `Row was not added to the table (before: ${rowsBefore}, after: ${rowsAfter}).` };
+			if (statusbarIdle()) {
+				const after = countRows();
+				if (after > before) return { ok: true };
+				const messages = collectValidationMessages();
+				if (messages.length) return { ok: false, error: `Portal rejected: ${messages.join('; ')}` };
 			}
+			if (Date.now() >= deadline) break;
+			await sleep(wait);
+			if (wait < 64) wait *= 2;
 		}
 
-		// Row count has ticked up and the statusbar has already gone idle
-		// in this loop's own check — no need to re-wait for idle again here.
-		return { ok: true };
+		await waitForStatusbarIdle(10000);
+		const after = countRows();
+		if (after > before) return { ok: true };
+		const alert = detectAlert();
+		if (alert) return { ok: false, error: `Portal validation error (late): ${alert}` };
+		const messages = collectValidationMessages();
+		return {
+			ok: false,
+			error: messages.length
+				? `Portal rejected: ${messages.join('; ')}`
+				: `Row was not added to the table (before: ${before}, after: ${after}).`,
+		};
 	}
 
-	// ── Row filling logic ────────────────────────────────────────────────────
-	async function fillRow(row, wsoAtsText = 'WSO') {
-		const timeFrom = row['START_TIME'];
-		const timeTo = row['END_TIME'];
-		const raw = row; // flat, keyed by the EGCA table's own header names
+	async function fillRow(raw, wsoAtsText) {
+		cacheFormRefs();
+		clearValidationMessages();
 
-		const { d, m, y } = parseDateDMY(raw['FROM_DATE']);
-		const fromDateStr = formatDDMMYYYY(d, m, y);
+		const timeFrom = raw.START_TIME;
+		const timeTo = raw.END_TIME;
+		const { d, m, y } = parseDateDMY(raw.FROM_DATE);
+		const fromDate = formatDDMMYYYY(d, m, y);
+		const toDate = raw.FROM_DATE === raw.TO_DATE && timeTo === '00:00'
+			? (() => { const n = addOneDay(d, m, y); return formatDDMMYYYY(n.d, n.m, n.y); })()
+			: (() => { const n = parseDateDMY(raw.TO_DATE); return formatDDMMYYYY(n.d, n.m, n.y); })();
 
-		let toDateStr;
-		if (raw['FROM_DATE'] === raw['TO_DATE'] && timeTo === '00:00') {
-			const n = addOneDay(d, m, y);
-			toDateStr = formatDDMMYYYY(n.d, n.m, n.y);
-		} else {
-			const { d: d2, m: m2, y: y2 } = parseDateDMY(raw['TO_DATE']);
-			toDateStr = formatDDMMYYYY(d2, m2, y2);
-		}
+		ensureCheckbox('briefing', true);
+		setDate('fromDate', fromDate);
+		setDate('toDate', toDate);
 
-		await ensureCheckbox(SEL.briefingCheckbox, true);
-		await setDatePickerValue(SEL.fromDate, fromDateStr);
-		await setDatePickerValue(SEL.toDate, toDateStr);
+		await selectPostingStation(raw.POSTING_STATION);
 
-		// ── Posting Station (by text) ────────────────────────────────────────
-		await selectByText(SEL.postingStation, raw['POSTING_STATION']);
-		await waitForFieldValue('#letterIcaoCode');
-
-		// ── WSO / ATS EGCA ID (by text) ──────────────────────────────────────
-		await waitForSelectOptions(SEL.wsoEgcaId);
-		if (raw['ATS_EGCA_ID']) {
+		const wso = await waitForElement('wso');
+		await waitForOptions('wso');
+		if (raw.ATS_EGCA_ID) {
 			try {
-				await selectByText(SEL.wsoEgcaId, raw['ATS_EGCA_ID']);
+				selectOptionText(wso, raw.ATS_EGCA_ID);
 			} catch (err) {
-				const altText = raw['ATS_EGCA_ID'].replace(/_/g, ' ');
-				if (altText !== raw['ATS_EGCA_ID']) {
-					await selectByText(SEL.wsoEgcaId, altText);
-				} else {
-					throw err;
-				}
+				const alt = raw.ATS_EGCA_ID.replace(/_/g, ' ');
+				if (alt === raw.ATS_EGCA_ID) throw err;
+				selectOptionText(wso, alt);
 			}
 		} else {
-			await selectByText(SEL.wsoEgcaId, wsoAtsText);
+			selectOptionText(wso, wsoAtsText);
 		}
 
-
-		if (raw['RATING']) {
-			// ── Rating (by text) ─────────────────────────────────────────────────
-			await selectByText(SEL.ratingId, raw['RATING']);
-
-			// ── ATS Unit (by text) ───────────────────────────────────────────────
-			await waitForSelectOptions(SEL.atsUnitId);
-			await selectByText(SEL.atsUnitId, raw['ATS_UNIT'].replace(/-/g, ''));
+		if (raw.RATING) {
+			selectOptionText(await waitForElement('rating'), raw.RATING);
+			const ats = await waitForOptions('atsUnit');
+			selectOptionText(ats, String(raw.ATS_UNIT || '').replace(/-/g, ''));
 		}
 
-		// ── Type of Duty (by text) ───────────────────────────────────────────
-		await selectByText(SEL.typeOfDutyId, raw['TYPE_OF_DUTY']);
+		selectOptionText(await waitForElement('duty'), raw.TYPE_OF_DUTY);
 
-		if (raw['TYPE_OF_DUTY'] === 'Operation Duty(Control)') {
-			if (raw['PROFICIENCY_CHECK'] === 'Y') {
-				await ensureCheckbox(SEL.isProficiency, true);
-				await waitForVisible(SEL.examinerLicNumDiv);
-				await selectByText(SEL.ojtEnv, raw['OJT_ENV']);
-				await typeIntoField(SEL.examinerAtcol, raw['INSTRUCTOR_LICENSE']);
-				await waitForFieldValue(SEL.ojtTrainerName);
-			}
-			if (raw['NEWLY_ESTAB_STATION']) {
-				await ensureCheckbox('#isAtsUnitChecked', true);
-			}
-
-		} else if (raw['TYPE_OF_DUTY'] === 'Instruction') {
-			if (raw['KNOWLEDGE_CHECK'] === 'Y') {
-				await ensureCheckbox(SEL.isTheoryClasses, true);
-				if (raw['TRAINEE_LICENSE']) {
-					await typeIntoField(SEL.remarksField, `${raw['TRAINEE_NAME']} (${raw['TRAINEE_LICENSE']})`);
+		switch (raw.TYPE_OF_DUTY) {
+			case 'Operation Duty(Control)':
+				if (raw.PROFICIENCY_CHECK === 'Y') {
+					ensureCheckbox('proficiency', true);
+					await waitForVisible('examinerDiv');
+					selectOptionText(await waitForElement('ojtenv'), raw.OJT_ENV);
+					setInput('examiner', raw.INSTRUCTOR_LICENSE);
+					await waitForValue('trainer');
 				}
-			} else if (raw['OJT_PROVIDED_CHECK'] === 'Y') {
-				await ensureCheckbox(SEL.isOjtProvided, true);
-				await waitForVisible(SEL.traineeLicNumDiv);
-				await selectByText(SEL.ojtEnv, raw['OJT_ENV']);
-				await typeIntoField(SEL.traineeAtcol, raw['TRAINEE_LICENSE']);
-				const instructorField = await waitForFieldValue('#nameOfInstructor');
-				if (raw['TRAINEE_LICEN_TYPE'] === "SATCOL" && raw['TRAINEE_NAME']) {
-					await typeIntoFieldAndVerify('#nameOfInstructor', raw['TRAINEE_NAME'].toUpperCase());
-				} else if (raw['TRAINEE_NAME'] && !namesMatch(instructorField.value, raw['TRAINEE_NAME'])) {
-					await typeIntoFieldAndVerify('#nameOfInstructor', raw['TRAINEE_NAME'].toUpperCase());
+				if (raw.NEWLY_ESTAB_UNIT_CHECK) ensureCheckbox('isAtsUnitChecked', true);
+				break;
+
+			case 'Instruction':
+				if (raw.KNOWLEDGE_CHECK === 'Y') {
+					ensureCheckbox('theory', true);
+					if (raw.TRAINEE_LICENSE) setInput('remarks', `${raw.TRAINEE_NAME} (${raw.TRAINEE_LICENSE})`);
+				} else if (raw.OJT_PROVIDED_CHECK === 'Y') {
+					ensureCheckbox('ojtProvided', true);
+					await waitForVisible('traineeDiv');
+					selectOptionText(await waitForElement('ojtenv'), raw.OJT_ENV);
+					setInput('trainee', raw.TRAINEE_LICENSE);
+					const instructor = await waitForValue('trainerName');
+					if (raw.TRAINEE_LICEN_TYPE === 'SATCOL' && raw.TRAINEE_NAME) {
+						await setInputVerified('trainerName', raw.TRAINEE_NAME.toUpperCase());
+					} else if (raw.TRAINEE_NAME && !namesMatch(instructor.value, raw.TRAINEE_NAME)) {
+						await setInputVerified('trainerName', raw.TRAINEE_NAME.toUpperCase());
+					}
 				}
-			}
+				break;
 
-		} else if (raw['TYPE_OF_DUTY'] === 'OJT (On Job Training)') {
-			await waitForVisible(SEL.examinerLicNumDiv);
-			await selectByText(SEL.ojtEnv, raw['OJT_ENV']);
-			await typeIntoField(SEL.examinerAtcol, raw['INSTRUCTOR_LICENSE']);
-			await waitForFieldValue(SEL.ojtTrainerName);
+			case 'OJT (On Job Training)':
+				await waitForVisible('examinerDiv');
+				selectOptionText(await waitForElement('ojtenv'), raw.OJT_ENV);
+				setInput('examiner', raw.INSTRUCTOR_LICENSE);
+				await waitForValue('trainer');
+				break;
 
-		} else if (raw['TYPE_OF_DUTY'] === 'Examiner Functions') {
-			if (raw['KNOWLEDGE_CHECK'] === 'Y') {
-				await ensureCheckbox(SEL.isTheoryClasses, true);
-				await typeIntoField('#nameOfInstructor', raw['INSTRUCTOR_NAME']);
-			} else if (raw['PROFICIENCY_CHECK'] === 'Y') {
-				await ensureCheckbox(SEL.isProficiency, true);
-				await waitForVisible(SEL.ojtFieldsDiv);
-				await selectByText(SEL.ojtEnv, raw['OJT_ENV']);
-				await typeIntoField(SEL.traineeAtcol, raw['TRAINEE_LICENSE']);
-				await waitForFieldValue('#nameOfInstructor');
-			} else if (raw['SKILL_TEST_CHECK'] === 'Y') {
-				await ensureCheckbox(SEL.isSkillTest, true);
-				await waitForVisible(SEL.ojtFieldsDiv);
-				await selectByText(SEL.ojtEnv, raw['OJT_ENV']);
-				await typeIntoField(SEL.traineeAtcol, raw['TRAINEE_LICENSE']);
-				const instructorField = await waitForFieldValue('#nameOfInstructor');
-				if (raw['TRAINEE_LICEN_TYPE'] === "SATCOL" && raw['TRAINEE_NAME']) {
-					await typeIntoFieldAndVerify('#nameOfInstructor', raw['TRAINEE_NAME'].toUpperCase());
-				} else if (raw['TRAINEE_NAME'] && !namesMatch(instructorField.value, raw['TRAINEE_NAME'])) {
-					await typeIntoFieldAndVerify('#nameOfInstructor', raw['TRAINEE_NAME'].toUpperCase());
+			case 'Examiner Functions':
+				if (raw.KNOWLEDGE_CHECK === 'Y') {
+					ensureCheckbox('theory', true);
+					setInput('trainerName', raw.INSTRUCTOR_NAME);
+				} else if (raw.PROFICIENCY_CHECK === 'Y') {
+					ensureCheckbox('proficiency', true);
+					await waitForVisible('ojtf');
+					selectOptionText(await waitForElement('ojtenv'), raw.OJT_ENV);
+					setInput('trainee', raw.TRAINEE_LICENSE);
+					await waitForValue('trainerName');
+				} else if (raw.SKILL_TEST_CHECK === 'Y') {
+					ensureCheckbox('skill', true);
+					await waitForVisible('ojtf');
+					selectOptionText(await waitForElement('ojtenv'), raw.OJT_ENV);
+					setInput('trainee', raw.TRAINEE_LICENSE);
+					const instructor = await waitForValue('trainerName');
+					if (raw.TRAINEE_LICEN_TYPE === 'SATCOL' && raw.TRAINEE_NAME) {
+						await setInputVerified('trainerName', raw.TRAINEE_NAME.toUpperCase());
+					} else if (raw.TRAINEE_NAME && !namesMatch(instructor.value, raw.TRAINEE_NAME)) {
+						await setInputVerified('trainerName', raw.TRAINEE_NAME.toUpperCase());
+					}
 				}
-			}
+				break;
 
-		} else if (raw['TYPE_OF_DUTY'] === 'Classroom training/Classroom theory functions') {
-			await waitForVisible(SEL.ojtFieldsDiv);
-			await waitForVisible(SEL.examinerLicNumDiv);
-			await typeIntoField(SEL.examinerAtcol, raw['INSTRUCTOR_LICENSE']);
-			await waitForFieldValue(SEL.ojtTrainerName);
+			case 'Classroom training/Classroom theory functions':
+				await waitForVisible('ojtf');
+				await waitForVisible('examinerDiv');
+				setInput('examiner', raw.INSTRUCTOR_LICENSE);
+				await waitForValue('trainer');
+				break;
 
-		} else if (raw['TYPE_OF_DUTY'] === 'Skill test') {
-			await waitForVisible(SEL.ojtFieldsDiv);
-			await selectByText(SEL.ojtEnv, raw['OJT_ENV']);
-			await typeIntoField(SEL.ojtTrainerName, raw['INSTRUCTOR_NAME']);
+			case 'Skill test':
+				await waitForVisible('ojtf');
+				selectOptionText(await waitForElement('ojtenv'), raw.OJT_ENV);
+				setInput('trainer', raw.INSTRUCTOR_NAME);
+				break;
 
-		} else if (raw['TYPE_OF_DUTY'] === 'Familiarization of ATS Unit') {
-			await waitForVisible(SEL.ojtFieldsDiv);
-			await selectByText(SEL.ojtEnv, raw['OJT_ENV']);
-			await typeIntoField('#newlyEstablisAtstsation', raw['NEWLY_ESTAB_STATION']);
-
-		} else if (raw['TYPE_OF_DUTY'] === 'ART(Annual Refresher Training)') {
-			// ART logic — no extra fields required today.
-		}
-		// Any other/unrecognised type of duty: no extra fields required.
-
-		if (raw['REMARKS']) {
-			await typeIntoField(SEL.remarksField, raw['REMARKS']);
+			case 'Familiarization of ATS Unit':
+				await waitForVisible('ojtf');
+				selectOptionText(await waitForElement('ojtenv'), raw.OJT_ENV);
+				setInput('newlyEstablisAtstsation', raw.NEWLY_ESTAB_STATION);
+				break;
 		}
 
-		await typeIntoField(SEL.startTime, timeFrom);
-		await typeIntoField(SEL.endTime, timeTo);
-		await waitForFieldValue('#totalDuration');
-		await sleep(300);
+		if (raw.REMARKS) setInput('remarks', raw.REMARKS);
+		setInput('startTime', timeFrom);
+		setInput('endTime', timeTo);
+
+		const timeAlert = detectAlert();
+		if (timeAlert) throw new Error(`Portal rejected the times (${timeFrom}–${timeTo}): ${timeAlert}`);
+		await waitForValue('totalDuration', 4000);
 	}
 
-	let _sessionRunning = false;
-	let _aborted = false;
+	const STATUS_CLASS = {
+		[ROW_STATUS.PENDING]: 'pending',
+		[ROW_STATUS.FILLING]: 'filling',
+		[ROW_STATUS.SUBMITTED]: 'submitted',
+		[ROW_STATUS.ERROR]: 'error',
+		[ROW_STATUS.SKIPPED]: 'skipped',
+	};
 
-	// ── Inline toolbar injected into the DGCA "Logbook" panel heading ────────
-	// The toolbar is the sole queue UI: Start/Abort controls, queue count,
-	// row list, and the WSO/ATS mode toggle all live here. State is kept in
-	// chrome.storage.session (via window.DGCA_STORAGE) so it survives page
-	// navigation and is visible to the EGCA-export page's mismatch banner
-	// and the popup's summary.
-	let _toolbarEls = null;
+	function statusLabel(status) {
+		if (aborted && (status === ROW_STATUS.PENDING || status === ROW_STATUS.FILLING)) return 'Stopped';
+		return ({
+			pending: 'Pending', filling: 'Filling…', submitted: '✓ Added', error: '✗ Error', skipped: 'Skipped',
+		}[status] || 'Pending');
+	}
 
-	// Row indices whose detail box is currently expanded in the toolbar's
-	// queue list — kept outside _toolbarEls since it must survive full
-	// row-list re-renders (renderToolbarRowList rebuilds the DOM).
-	let _expandedRows = new Set();
+	function isEntryPage() {
+		return document.querySelector('#breadcrumb')?.textContent.includes('Air Traffic Controllers e-Log Book')
+			&& !!document.querySelector(SEL.briefing);
+	}
 
-	function findLogbookHeading() {
-		const titles = document.querySelectorAll('h5.panel-title');
-		for (const el of titles) {
-			if (el.textContent.trim() === 'Logbook') {
-				return el.closest('.panel-heading');
-			}
+	function findHeading() {
+		for (const title of document.querySelectorAll('h5.panel-title')) {
+			if (title.textContent.trim() === 'Logbook') return title.closest('.panel-heading');
 		}
 		return null;
 	}
 
-	// Only inject the toolbar on the actual e-Log Book entry page, not any
-	// other page on the DGCA portal that happens to have its own unrelated
-	// "Logbook" panel.
-	function isOnEntryPage() {
-		const breadcrumbEl = document.querySelector('#breadcrumb');
-		const breadcrumbOk = !!breadcrumbEl &&
-			breadcrumbEl.textContent.includes('Air Traffic Controllers e-Log Book');
-		return breadcrumbOk && !!document.querySelector(SEL.briefingCheckbox);
-	}
-
-	// Formats a duration in ms as e.g. "850ms" or "1.4s" — used for the
-	// per-row "time to add" badge (debugging / performance monitoring).
-	function formatDuration(ms) {
-		if (ms == null) return '';
-		if (ms < 1000) return `${Math.round(ms)}ms`;
-		return `${(ms / 1000).toFixed(1)}s`;
-	}
-
-	function injectToolbarStyle() {
+	function injectStyle() {
 		if (document.getElementById('dgca-ext-toolbar-style')) return;
 		const style = document.createElement('style');
 		style.id = 'dgca-ext-toolbar-style';
 		style.textContent = `
-			.dgca-ext-toolbar {
-				display: flex;
-				flex-direction: column;
-				gap: 5px;
-				margin-top: 8px;
-				clear: both;
-				padding: 7px 10px;
-				background: #12121f;
-				border: 1px solid #2a2a3e;
-				border-radius: 8px;
-				box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
-				font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-				font-size: 12px;
-				color: #e0e0e0;
-			}
-			.dgca-ext-toolbar-label {
-				display: flex;
-				align-items: center;
-				justify-content: space-between;
-				gap: 5px;
-				font-size: 10px;
-				font-weight: 700;
-				letter-spacing: 0.5px;
-				text-transform: uppercase;
-				color: #7a7a95;
-			}
-			/* Generic text-shimmer helper — color-parameterized via CSS
-			   custom properties so the title and footer credit can share the
-			   same animation without duplicating keyframes. The emoji/prefix
-			   next to the shimmered text is deliberately kept OUTSIDE this
-			   span in the markup: -webkit-background-clip: text +
-			   color: transparent applied to a span containing an emoji can
-			   cause the emoji glyph itself to flicker/blank (color emoji
-			   glyphs don't clip reliably), which was the root cause of the
-			   original "glitching" title.
-			   The gradient tile is sized to 3x the text's own width
-			   (background-size: 300%, relative to the element itself since
-			   it's the background-painting area) and only ever travels from
-			   background-position 100% to 0%. At both ends of that range the
-			   3x-wide tile still fully overlaps the element — so the base
-			   shimmer color always sits behind the text and it never drops to
-			   fully transparent mid-loop (a fixed px sweep wider than the
-			   text, tried earlier, let the tile slide completely off the
-			   text and made it flicker invisible at each end). Only the
-			   bright highlight band drifts across and off the edges. This is
-			   also reflow-safe (percentages, not px): it auto-scales if the
-			   text width changes, e.g. a late webfont swap. */
-			.dgca-ext-shimmer-text {
-				background-image: linear-gradient(90deg,
-					var(--dgca-shimmer-base) 0%, var(--dgca-shimmer-base) 40%,
-					var(--dgca-shimmer-hi) 50%,
-					var(--dgca-shimmer-base) 60%, var(--dgca-shimmer-base) 100%);
-				background-size: 300% 100%;
-				background-repeat: no-repeat;
-				-webkit-background-clip: text;
-				background-clip: text;
-				-webkit-text-fill-color: transparent;
-				color: transparent;
-				display: inline-block;
-				animation: dgca-ext-shimmer-text 6s linear infinite;
-			}
-			@keyframes dgca-ext-shimmer-text {
-				from { background-position: 100% 0; }
-				to   { background-position: 0% 0; }
-			}
-			/* background-position animations (this one, unlike the
-			   transform-based dgca-ext-shimmer-bar) force a repaint every
-			   frame — -webkit-background-clip: text has to re-rasterize the
-			   glyphs under the moving gradient each time, since it's not a
-			   compositor-only property. That's negligible for the
-			   title/footer, which mostly sit idle, but the Queue label
-			   (--queue) runs continuously through an entire fill session,
-			   competing with fillRow()/clickAddAndVerify()'s own DOM writes
-			   on the *same* page's main thread — plausibly enough to add up
-			   over a long queue. Previously paused (not removed) while a
-			   session was running, toggled via the --session-running class
-			   on the toolbar root in runSession()/notifySessionState() —
-			   but stopping the shimmer during a session is no longer
-			   wanted, so it now keeps sweeping continuously regardless of
-			   session state. */
-			.dgca-ext-shimmer-text--title {
-				--dgca-shimmer-base: #7a7a95;
-				--dgca-shimmer-hi: #eaf6ff;
-			}
-			.dgca-ext-shimmer-text--footer {
-				--dgca-shimmer-base: #4fc3f7;
-				--dgca-shimmer-hi: #ffffff;
-				animation-duration: 7s;
-			}
-			.dgca-ext-video-guide {
-				color: #4fc3f7;
-				text-decoration: none;
-				font-weight: 700;
-				letter-spacing: 0.3px;
-			}
-			.dgca-ext-video-guide:hover {
-				text-decoration: underline;
-			}
-			.dgca-ext-toolbar-header-controls {
-				display: flex;
-				align-items: center;
-				gap: 6px;
-			}
-			.dgca-ext-iconbtn {
-				width: 18px;
-				height: 18px;
-				border: none;
-				background: transparent;
-				color: #7a7a95;
-				font-size: 12px;
-				line-height: 1;
-				border-radius: 4px;
-				cursor: pointer;
-				display: flex;
-				align-items: center;
-				justify-content: center;
-				flex-shrink: 0;
-			}
-			.dgca-ext-iconbtn:hover {
-				background: #232338;
-				color: #fff;
-			}
-			/* Minimize: header stays visible, everything below it collapses. */
-			.dgca-ext-toolbar--min .dgca-ext-toolbar-body {
-				display: none;
-			}
-			.dgca-ext-toolbar--min {
-				gap: 0;
-			}
-			/* Hidden entirely when the queue is empty. */
-			.dgca-ext-toolbar--hidden {
-				display: none !important;
-			}
-			/* Info (ⓘ) popover — appended to <body> (not the toolbar) so it
-			   isn't clipped by any ancestor's overflow, and positioned in JS
-			   relative to the info button. Same look as the EGCA-export
-			   page's floating-panel info popover (injector-egcaexport.js). */
-			.dgca-ext-info-popover {
-				position: fixed;
-				z-index: 999999;
-				width: 220px;
-				max-width: calc(100vw - 16px);
-				font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-				background: #16213e;
-				color: #cfd3e0;
-				border: 1px solid #2a3a5e;
-				border-radius: 8px;
-				box-shadow: 0 4px 16px rgba(0, 0, 0, .4);
-				padding: 10px 12px;
-				font-size: 11px;
-				line-height: 1.5;
-				display: none;
-			}
-			.dgca-ext-info-popover--open {
-				display: block;
-			}
-			.dgca-ext-info-notice {
-				display: flex;
-				gap: 6px;
-				align-items: flex-start;
-				color: #f0c674;
-				font-weight: 600;
-				margin-bottom: 8px;
-			}
-			.dgca-ext-info-links a {
-				display: flex; align-items: center; justify-content: center;
-				gap: 6px;
-				padding: 7px 10px;
-				background: rgba(79, 195, 247, 0.12);
-				border: 1px solid rgba(79, 195, 247, 0.45);
-				border-radius: 6px;
-				color: #7fd4ff; font-weight: 600; font-size: 11px;
-				text-decoration: none; text-align: center;
-				transition: background .15s, border-color .15s, color .15s;
-			}
-			.dgca-ext-info-links a:hover {
-				background: rgba(79, 195, 247, 0.22);
-				border-color: #4fc3f7;
-				color: #fff;
-			}
-			.dgca-ext-info-links a .dgca-ext-info-arrow {
-				transition: transform .15s;
-			}
-			.dgca-ext-info-links a:hover .dgca-ext-info-arrow {
-				transform: translateX(2px);
-			}
-			.dgca-ext-info-credit {
-				margin-top: 9px;
-				padding-top: 8px;
-				border-top: 1px solid #2a3a5e;
-				text-align: center;
-				font-size: 10px;
-				color: #bdbdd7;
-			}
-			.dgca-ext-info-credit .dgca-ext-shimmer-text {
-				animation-duration: 7s;
-			}
-			.dgca-ext-toolbar-row {
-				display: flex;
-				align-items: center;
-				gap: 10px;
-				flex-wrap: wrap;
-			}
-			.dgca-ext-toolbar button {
-				border: none;
-				border-radius: 6px;
-				padding: 6px 14px;
-				font-size: 12px;
-				font-weight: 600;
-				cursor: pointer;
-				transition: filter 0.15s, transform 0.05s;
-			}
-			.dgca-ext-toolbar button:not(:disabled):hover {
-				filter: brightness(1.15);
-			}
-			.dgca-ext-toolbar button:not(:disabled):active {
-				transform: translateY(1px);
-			}
-			.dgca-ext-toolbar button:disabled {
-				opacity: 0.4;
-				cursor: not-allowed;
-			}
-			#dgca-ext-btn-start {
-				background: #4fc3f7;
-				color: #0a0a14;
-				position: relative;
-				overflow: hidden;
-			}
-			/* Sweeping highlight overlay — only animates while the button is
-			   actually clickable (session not running, queue non-empty), so
-			   a disabled Start button doesn't shimmer as if it were live. */
-			#dgca-ext-btn-start:not(:disabled)::after {
-				content: '';
-				position: absolute;
-				top: 0;
-				left: 0;
-				height: 100%;
-				width: 50%;
-				background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.65) 50%, rgba(255, 255, 255, 0) 100%);
-				animation: dgca-ext-shimmer-bar 3.2s ease-in-out infinite;
-				pointer-events: none;
-			}
-			#dgca-ext-btn-abort { background: #ef5350; color: #fff; }
-			.dgca-ext-divider {
-				height: 1px;
-				background: #24243a;
-				margin: 2px 0;
-			}
-			.dgca-ext-columns {
-				display: flex;
-				gap: 14px;
-				align-items: stretch;
-			}
-			.dgca-ext-col-left {
-				flex: 0 0 30%;
-				min-width: 0;
-				display: flex;
-				flex-direction: column;
-				gap: 8px;
-			}
-			.dgca-ext-col-right {
-				flex: 1;
-				min-width: 0;
-				display: flex;
-				flex-direction: column;
-				gap: 6px;
-				border-left: 1px solid #24243a;
-				padding-left: 14px;
-			}
-			.dgca-ext-col-right-label {
-				display: inline-block;
-				align-self: flex-start;
-				font-size: 10px;
-				font-weight: 700;
-				letter-spacing: 0.5px;
-				text-transform: uppercase;
-				/* color intentionally omitted — this element also carries
-				   dgca-ext-shimmer-text(--queue), which owns the color via a
-				   clipped gradient; a plain color here would win the cascade
-				   (declared later, same specificity) and silently kill the
-				   shimmer clip. Its text is reset via .textContent whenever
-				   the queue count/name changes (see updateToolbarUiState),
-				   which doesn't recreate the element, so the shimmer
-				   animation keeps running uninterrupted across updates.
-				   Note: background-color, not the background shorthand —
-				   the shorthand resets background-image (the shimmer
-				   gradient) to none for anything it doesn't mention, and
-				   since this rule is declared after .dgca-ext-shimmer-text
-				   it would win that tie and wipe the gradient out, leaving
-				   fully transparent text with nothing behind it. */
-				background-color: rgba(79, 195, 247, 0.12);
-				border: 1px solid rgba(79, 195, 247, 0.3);
-				border-radius: 4px;
-				padding: 3px 8px;
-			}
-			.dgca-ext-shimmer-text--queue {
-				--dgca-shimmer-base: #4fc3f7;
-				--dgca-shimmer-hi: #ffffff;
-				animation-duration: 6.5s;
-			}
-			.dgca-ext-progress-row {
-				display: flex;
-				flex-direction: column;
-				align-items: stretch;
-				gap: 4px;
-			}
-			.dgca-ext-progress-row .dgca-ext-toolbar-row {
-				justify-content: space-between;
-			}
-			.dgca-ext-progress-text {
-				color: #4fc3f7;
-				font-weight: 600;
-				font-size: 12px;
-			}
-			.dgca-ext-progress-track {
-				height: 5px;
-				background: #2a2a3e;
-				border-radius: 3px;
-				overflow: hidden;
-				display: flex;
-			}
-			.dgca-ext-progress-fill {
-				height: 100%;
-				width: 0%;
-				position: relative;
-				overflow: hidden;
-				transition: width 0.3s ease;
-			}
-			.dgca-ext-progress-fill--success {
-				background: #4caf50;
-			}
-			.dgca-ext-progress-fill--error {
-				background: #ef5350;
-			}
-			/* Slow shimmer sweep over the filled portion of the bar while a
-			   session is actively running — toggled via the --active modifier
-			   class in JS (updateToolbarProgressBar), not shown on a
-			   completed/idle bar. */
-			.dgca-ext-progress-fill--active::after {
-				content: '';
-				position: absolute;
-				top: 0;
-				left: 0;
-				height: 100%;
-				width: 40%;
-				background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.45) 50%, rgba(255, 255, 255, 0) 100%);
-				animation: dgca-ext-shimmer-bar 3.2s ease-in-out infinite;
-			}
-			@keyframes dgca-ext-shimmer-bar {
-				0% { transform: translateX(-100%); }
-				100% { transform: translateX(350%); }
-			}
-			.dgca-ext-error-pill {
-				background: #3d1515;
-				color: #ef5350;
-				cursor: pointer;
-				display: block;
-				white-space: normal;
-				padding: 6px 10px;
-				font-size: 11px;
-				text-align: left;
-				border: 1px solid #5a1b1b;
-				border-radius: 6px;
-				font-weight: 600;
-				position: relative;
-				overflow: hidden;
-				transition: filter 0.15s;
-			}
-			.dgca-ext-error-pill:hover {
-				filter: brightness(1.2);
-			}
-			/* Always-on shimmer — unlike the "Filling"/progress/Start-button
-			   sweeps above, this one isn't conditional on a session being
-			   active: an error pill is meant to keep drawing the eye until
-			   the user deals with it, whether or not anything is currently
-			   running. */
-			.dgca-ext-error-pill::after {
-				content: '';
-				position: absolute;
-				top: 0;
-				left: 0;
-				height: 100%;
-				width: 40%;
-				background: linear-gradient(90deg, rgba(239, 83, 80, 0) 0%, rgba(239, 83, 80, 0.35) 50%, rgba(239, 83, 80, 0) 100%);
-				animation: dgca-ext-shimmer-bar 3.2s ease-in-out infinite;
-				pointer-events: none;
-			}
-			.dgca-ext-wso-row {
-				gap: 16px;
-				color: #b5b5c5;
-			}
-			.dgca-ext-wso-option {
-				display: flex;
-				align-items: center;
-				gap: 6px;
-				cursor: pointer;
-			}
-			.dgca-ext-wso-option input[type="radio"] {
-				cursor: pointer;
-				accent-color: #4fc3f7;
-			}
-			.dgca-ext-wso-option strong {
-				color: #e0e0e0;
-			}
-			.dgca-ext-wso-option input[type="radio"]:disabled,
-			.dgca-ext-wso-custom-text:disabled {
-				cursor: not-allowed;
-				opacity: 0.5;
-			}
-			.dgca-ext-wso-custom-text {
-				background: #0f0f1a;
-				border: 1px solid #4a4a6e;
-				border-radius: 4px;
-				color: #e0e0e0;
-				font-size: 12px;
-				padding: 3px 8px;
-				width: 84px;
-			}
-			.dgca-ext-wso-custom-text:focus {
-				outline: none;
-				border-color: #4fc3f7;
-			}
-			.dgca-ext-ats-id-info {
-				color: #b5b5c5;
-			}
-			.dgca-ext-ats-id-info strong {
-				color: #4fc3f7;
-				background: rgba(79, 195, 247, 0.12);
-				padding: 2px 8px;
-				border-radius: 4px;
-				border: 1px solid rgba(79, 195, 247, 0.25);
-			}
-			.dgca-ext-btn-clear {
-				background: #23233a;
-				border: 1px solid #4a4a6e;
-				color: #cfd3e0;
-			}
-			.dgca-ext-btn-clear:not(:disabled):hover {
-				background: #2c2c48;
-				border-color: #6a6a9e;
-				color: #fff;
-			}
-			.dgca-ext-btn-clear-done {
-				background: #17281c;
-				border: 1px solid #2e6b3e;
-				color: #6fcf82;
-			}
-			.dgca-ext-btn-clear-done:not(:disabled):hover {
-				background: #1c3322;
-				border-color: #3e8c53;
-				color: #8ee6a0;
-			}
-			.dgca-ext-row-list {
-				display: flex;
-				flex-direction: column;
-				gap: 7px;
-				max-height: 180px;
-				overflow-y: auto;
-				margin-top: 4px;
-			}
-			.dgca-ext-row-item {
-				display: flex;
-				flex-direction: column;
-				gap: 4px;
-				background: #1a1a2e;
-				border: 1px solid #2a2a3e;
-				border-radius: 5px;
-				padding: 3px 7px;
-				cursor: pointer;
-				/* Without this, flexbox treats every card as shrinkable
-				   (the default), and once total content (e.g. after
-				   expanding one card's detail box) exceeds the row-list's
-				   max-height, it squeezes OTHER cards shorter to try to
-				   still fit everything — instead of leaving them alone and
-				   letting overflow-y: auto do its job. That's what showed
-				   up as the filling row losing height the moment a
-				   different row was expanded above it. */
-				flex-shrink: 0;
-			}
-			.dgca-ext-row-item:hover {
-				border-color: #3a3a5e;
-			}
-			.dgca-ext-row-item--expanded {
-				border-color: #4a4a6e;
-			}
-			/* Applied to whichever row card is currently 'filling' — a soft
-			   blue glow sweep so the active row is obvious at a glance in a
-			   long queue list, independent of the "Filling" pill shimmer. */
-			.dgca-ext-row-item--active {
-				position: relative;
-				overflow: hidden;
-				border-color: #2f6fa3;
-			}
-			.dgca-ext-row-item--active::after {
-				content: '';
-				position: absolute;
-				top: 0;
-				left: 0;
-				height: 100%;
-				width: 35%;
-				background: linear-gradient(90deg, rgba(79, 195, 247, 0) 0%, rgba(79, 195, 247, 0.18) 50%, rgba(79, 195, 247, 0) 100%);
-				animation: dgca-ext-shimmer-bar 3.2s ease-in-out infinite;
-				pointer-events: none;
-			}
-			.dgca-ext-row-item__main {
-				display: flex;
-				align-items: center;
-				justify-content: space-between;
-				gap: 4px;
-			}
-			.dgca-ext-row-item__detail {
-				padding: 6px 8px;
-				background: #0f0f1a;
-				border: 1px solid #2a2a3e;
-				border-radius: 4px;
-				color: #b5b5c5;
-				font-size: 10px;
-				font-family: 'SF Mono', 'Consolas', monospace;
-				white-space: pre-wrap;
-				word-break: break-word;
-				cursor: default;
-			}
-			.dgca-ext-row-item__detail--error {
-				border-color: #3d1515;
-				color: #ef5350;
-			}
-			.dgca-ext-row-item__detail--submitted {
-				border-color: #2e6b3e;
-				color: #6fcf82;
-			}
-			.dgca-ext-row-item__detail--filling {
-				border-color: #1a3550;
-				color: #4fc3f7;
-			}
-			.dgca-ext-row-item__info {
-				display: flex;
-				gap: 5px;
-				align-items: center;
-				flex: 1;
-				min-width: 0;
-				overflow: hidden;
-				flex-wrap: wrap;
-			}
-			.dgca-ext-row-item__num {
-				font-size: 10px;
-				color: #7a7a95;
-				min-width: 14px;
-			}
-			.dgca-ext-row-item__date {
-				font-size: 11px;
-				color: #4fc3f7;
-			}
-			.dgca-ext-row-item__time {
-				font-size: 10px;
-				color: #aab0c0;
-				font-family: 'SF Mono', 'Consolas', monospace;
-			}
-			/* "Time to add" debugging/perf badge — separate class from
-			   __time above (which shows the row's own from/to time range) so
-			   the two aren't confused; distinct amber color for scannability.
-			   The <10s/>=10s threshold is evaluated once in JS when the
-			   timing value first arrives (buildRowItemHtml/patchRowItem),
-			   not on every frame or repeatedly — it just picks a modifier
-			   class alongside the text, so this adds no ongoing CSS/JS cost
-			   beyond what the badge already did. */
-			.dgca-ext-row-item__duration {
-				font-size: 10px;
-				color: #ffa726;
-				font-family: 'SF Mono', 'Consolas', monospace;
-			}
-			.dgca-ext-row-item__duration--fast {
-				color: #66bb6a;
-			}
-			.dgca-ext-row-item__delete {
-				background: none;
-				border: none;
-				color: #ef5350;
-				cursor: pointer;
-				font-size: 14px;
-				padding: 0 3px;
-				opacity: 0.4;
-				flex-shrink: 0;
-			}
-			.dgca-ext-row-item__delete:hover {
-				opacity: 1;
-			}
-			.dgca-ext-pill {
-				font-size: 9px;
-				font-weight: 700;
-				padding: 1px 6px;
-				border-radius: 999px;
-				white-space: nowrap;
-				flex-shrink: 0;
-			}
-			.dgca-ext-pill--pending { background: #2a2a3e; color: #9a9ab0; }
-			.dgca-ext-pill--filling {
-				background: #1a3550;
-				color: #4fc3f7;
-				position: relative;
-				overflow: hidden;
-			}
-			/* Sweep on the "Filling" pill itself — a second shimmer cue
-			   alongside the row-card glow above, same speed as every other
-			   shimmer in the toolbar now (dgca-ext-shimmer-bar's shared
-			   3.2s duration) for a consistent, calmer feel. */
-			.dgca-ext-pill--filling::after {
-				content: '';
-				position: absolute;
-				top: 0;
-				left: 0;
-				height: 100%;
-				width: 60%;
-				background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.55) 50%, rgba(255, 255, 255, 0) 100%);
-				animation: dgca-ext-shimmer-bar 3.2s ease-in-out infinite;
-				pointer-events: none;
-			}
-			.dgca-ext-pill--submitted { background: #1a3320; color: #4caf50; }
-			/* Error pill: unlike --filling above (only shimmers while a
-			   session is actively running), this one shimmers unconditionally
-			   — an error should keep drawing the eye until the user clears it,
-			   whether or not a session is currently in progress. */
-			.dgca-ext-pill--error {
-				background: #3d1515;
-				color: #ef5350;
-				position: relative;
-				overflow: hidden;
-			}
-			.dgca-ext-pill--error::after {
-				content: '';
-				position: absolute;
-				top: 0;
-				left: 0;
-				height: 100%;
-				width: 60%;
-				background: linear-gradient(90deg, rgba(239, 83, 80, 0) 0%, rgba(239, 83, 80, 0.45) 50%, rgba(239, 83, 80, 0) 100%);
-				animation: dgca-ext-shimmer-bar 3.2s ease-in-out infinite;
-				pointer-events: none;
-			}
-			.dgca-ext-pill--skipped { background: #2e2e3e; color: #9a9ab0; }
-			.dgca-ext-footer {
-				text-align: center;
-				font-size: 10px;
-				color: #6a6a8a;
-				padding-top: 5px;
-				margin-top: 1px;
-				border-top: 1px solid #24243a;
-			}
-			.dgca-ext-footer strong {
-				font-weight: 600;
-			}
-			.dgca-ext-footer-version {
-				margin-left: 4px;
-			}
+			#dgca-ext-toolbar{
+				--bg:#0b0f14;--surface:#11161d;--surface-2:#171d25;--border:#27303b;
+				--text:#edf2f7;--muted:#8e9aaa;--accent:#63b3ff;--accent-2:#8f7cff;
+				margin-top:8px;padding:10px 12px;background:var(--bg);border:1px solid var(--border);
+				border-radius:10px;color:var(--text);font:12px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+				color-scheme:dark;contain:layout paint style;box-shadow:0 4px 14px rgba(0,0,0,.16);
+			}
+			#dgca-ext-toolbar *{box-sizing:border-box}
+			#dgca-ext-toolbar.dgca-ext-toolbar--hidden{display:none}
+			#dgca-ext-toolbar.dgca-ext-toolbar--min .dgca-ext-toolbar-body{display:none}
+			#dgca-ext-toolbar .dgca-ext-toolbar-header,
+			#dgca-ext-toolbar .dgca-ext-toolbar-row,
+			#dgca-ext-toolbar .dgca-ext-row{display:flex;align-items:center;gap:7px}
+			#dgca-ext-toolbar .dgca-ext-toolbar-header{justify-content:space-between;padding-bottom:8px;border-bottom:1px solid var(--border);font-weight:700;letter-spacing:.01em;color:var(--text)}
+			#dgca-ext-toolbar .dgca-ext-toolbar-title{display:flex;align-items:center;gap:7px}
+			#dgca-ext-toolbar .dgca-ext-toolbar-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px rgba(99,179,255,.12)}
+			#dgca-ext-toolbar .dgca-ext-toolbar-header button,
+			#dgca-ext-toolbar .dgca-ext-toolbar-body button{
+				border:1px solid var(--border);border-radius:6px;background:var(--surface-2);color:var(--text);
+				padding:5px 9px;cursor:pointer;font:inherit;line-height:1.1;transition:background .12s ease,border-color .12s ease,transform .12s ease;
+			}
+			#dgca-ext-toolbar button:hover:not(:disabled){background:#1c2430;border-color:#344151}
+			#dgca-ext-toolbar button:active:not(:disabled){transform:translateY(1px)}
+			#dgca-ext-toolbar button:focus-visible,
+			#dgca-ext-toolbar input:focus-visible{outline:2px solid rgba(99,179,255,.65);outline-offset:1px}
+			#dgca-ext-toolbar button:disabled{opacity:.42;cursor:default}
+			#dgca-ext-toolbar #dgca-ext-start{border-color:#315f89;background:#142a3d;font-weight:700;color:#9fd2ff}
+			#dgca-ext-toolbar #dgca-ext-start:hover:not(:disabled){background:#18354c;border-color:#407eae}
+			#dgca-ext-toolbar #dgca-ext-abort{color:#ff9b9b;border-color:#71353a;background:#32191c;font-weight:700}
+			#dgca-ext-toolbar #dgca-ext-abort:hover:not(:disabled){background:#412023;border-color:#884149}
+			#dgca-ext-toolbar .dgca-ext-toolbar-body{margin-top:9px;background:transparent;color:var(--text)}
+			#dgca-ext-toolbar .dgca-ext-layout{display:grid;grid-template-columns:minmax(235px,.9fr) minmax(320px,1.35fr);gap:10px}
+			#dgca-ext-toolbar .dgca-ext-left,
+			#dgca-ext-toolbar .dgca-ext-right{min-width:0;padding:9px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text)}
+			#dgca-ext-toolbar .dgca-ext-controls{display:flex;flex-wrap:wrap;gap:6px}
+			#dgca-ext-toolbar .dgca-ext-wso{margin-top:9px;flex-wrap:wrap;color:var(--text)}
+			#dgca-ext-toolbar .dgca-ext-wso label{display:flex;align-items:center;gap:5px;color:var(--muted);font-size:11px}
+			#dgca-ext-toolbar .dgca-ext-wso input[type=radio]{accent-color:var(--accent)}
+			#dgca-ext-toolbar .dgca-ext-wso input[type=text]{width:88px;padding:5px 7px;border:1px solid var(--border);border-radius:5px;background:#0d1218;color:var(--text);font:inherit}
+			#dgca-ext-toolbar .dgca-ext-ids{margin-top:9px;padding:6px 8px;border:1px solid #2b465f;border-radius:6px;background:#10202d;color:#9fd2ff;font-size:10px}
+			#dgca-ext-toolbar .dgca-ext-progress{margin-top:10px}
+			#dgca-ext-toolbar .dgca-ext-progress-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:5px;color:var(--muted);font-size:10px}
+			#dgca-ext-toolbar .dgca-ext-progress-text{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+			#dgca-ext-toolbar .dgca-ext-progress-percent{font-variant-numeric:tabular-nums;color:#c7d2df;font-weight:700}
+			#dgca-ext-toolbar .dgca-ext-progress-track{height:5px;overflow:hidden;border-radius:999px;background:#222a34}
+			#dgca-ext-toolbar .dgca-ext-progress-fill{height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent-2));border-radius:inherit;transition:width .16s ease;will-change:width}
+			#dgca-ext-toolbar .dgca-ext-error{margin-top:8px;padding:7px 8px;background:#30171b;border:1px solid #6b3038;border-radius:6px;color:#ff9b9b;display:none;cursor:pointer;font-size:10px;line-height:1.35}
+			#dgca-ext-toolbar .dgca-ext-queue-title{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:7px;color:var(--text);font-weight:700}
+			#dgca-ext-toolbar .dgca-ext-queue-subtitle{color:var(--muted);font-weight:500;font-size:10px}
+			#dgca-ext-toolbar .dgca-ext-row-list{display:flex;flex-direction:column;gap:5px;max-height:220px;overflow:auto;padding-right:2px;scrollbar-width:thin;scrollbar-color:#34404d transparent}
+			#dgca-ext-toolbar .dgca-ext-row-list::-webkit-scrollbar{width:7px}
+			#dgca-ext-toolbar .dgca-ext-row-list::-webkit-scrollbar-thumb{background:#34404d;border-radius:999px}
+			#dgca-ext-toolbar .dgca-ext-row{display:block;padding:7px 8px;background:#0d1218;border:1px solid #202833;border-radius:7px;min-width:0;color:#dce4ed;transition:border-color .12s ease,background .12s ease}
+			#dgca-ext-toolbar .dgca-ext-row-mainline{display:flex;align-items:center;gap:7px;min-width:0}
+			#dgca-ext-toolbar .dgca-ext-row-main{display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;flex:1}
+			#dgca-ext-toolbar .dgca-ext-row-main span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+			#dgca-ext-toolbar .dgca-ext-row-num{color:#647080;min-width:18px;font-variant-numeric:tabular-nums}
+			#dgca-ext-toolbar .dgca-ext-row-date{color:#8ecbff;font-weight:600}
+			#dgca-ext-toolbar .dgca-ext-row-meta{color:#aab5c2}
+			#dgca-ext-toolbar .dgca-ext-row-pill{font-size:9px;font-weight:700;padding:3px 7px;border-radius:999px;white-space:nowrap;border:1px solid transparent}
+			#dgca-ext-toolbar .dgca-ext-row-pill.pending{background:#202833;color:#aeb8c5;border-color:#2b3440}
+			#dgca-ext-toolbar .dgca-ext-row-pill.filling{background:#102b40;color:#76c9ff;border-color:#244e6a}
+			#dgca-ext-toolbar .dgca-ext-row-pill.submitted{background:#10281a;color:#79df98;border-color:#244d31}
+			#dgca-ext-toolbar .dgca-ext-row-pill.error{background:#39171c;color:#ff8f98;border-color:#69313a}
+			#dgca-ext-toolbar .dgca-ext-row-pill.skipped{background:#242830;color:#b4bcc7;border-color:#343a43}
+			#dgca-ext-toolbar .dgca-ext-row-delete{border:0!important;background:transparent!important;color:#ff8f98!important;padding:0 2px!important;font-size:14px!important;line-height:1!important}
+			#dgca-ext-toolbar .dgca-ext-row-error{display:none;margin:5px 0 0 24px;padding:5px 6px;background:#1d1114;border-left:2px solid #c6535f;color:#ff9ca4;font-size:10px;line-height:1.4;white-space:normal;overflow-wrap:anywhere}
+			#dgca-ext-toolbar .dgca-ext-row--active{border-color:#2c5875;background:#101a24}
+			#dgca-ext-toolbar .dgca-ext-min{padding:2px 7px!important;color:var(--muted)!important;background:#141a21!important}
+			@media(max-width:900px){#dgca-ext-toolbar .dgca-ext-layout{grid-template-columns:1fr}}
+			@media(prefers-reduced-motion:reduce){#dgca-ext-toolbar *{transition:none!important}}
 		`;
+
 		document.head.appendChild(style);
 	}
 
-	// ── Minimize state (persisted) ────────────────────────────────────
-	const TOOLBAR_MIN_KEY = 'dgca_toolbar_min';
-	function loadToolbarMinimized() {
-		try { return localStorage.getItem(TOOLBAR_MIN_KEY) === '1'; }
-		catch (_) { return false; }
+	function minimizedState() {
+		try { return localStorage.getItem('dgca_toolbar_min') === '1'; } catch (_) { return false; }
 	}
-	function saveToolbarMinimized(min) {
-		try { localStorage.setItem(TOOLBAR_MIN_KEY, min ? '1' : '0'); } catch (_) { }
+
+	function setMinimized(value) {
+		const toolbar = toolbarEls?.toolbar;
+		if (!toolbar) return;
+		toolbar.classList.toggle('dgca-ext-toolbar--min', value);
+		toolbarEls.min.textContent = value ? '▢' : '—';
+		try { localStorage.setItem('dgca_toolbar_min', value ? '1' : '0'); } catch (_) { }
 	}
-	function setToolbarMinimized(toolbar, minBtn, min) {
-		toolbar.classList.toggle('dgca-ext-toolbar--min', min);
-		if (minBtn) {
-			minBtn.textContent = min ? '▢' : '—';
-			minBtn.title = min ? 'Expand' : 'Minimize';
+
+	function showProgress(text, percent = null) {
+		if (!toolbarEls) return;
+		toolbarEls.progressText.textContent = text;
+		if (percent != null) {
+			const safe = Math.max(0, Math.min(100, Number(percent) || 0));
+			toolbarEls.progressFill.style.width = `${safe}%`;
+			toolbarEls.progressPercent.textContent = `${Math.round(safe)}%`;
 		}
-		saveToolbarMinimized(min);
 	}
 
-	// ── "ⓘ" info popover — unofficial-extension notice + credit ────────
-	// Same pattern as the EGCA-export page's floating-panel info popover
-	// (injector-egcaexport.js): appended to <body> so it isn't clipped by
-	// any ancestor's overflow, positioned in JS relative to the button.
-	// PLACEHOLDER: swap in the real Chrome Web Store URL once the official
-	// extension is published.
-    const OFFICIAL_EXTENSION_URL = 'https://chromewebstore.google.com/detail/egca-atc-logbook-autofill/fdhkbilacfkbfgghadoeefcblipnlhgd';
-
-	function buildInfoPopover() {
-		const existing = document.getElementById('dgca-ext-info-popover');
-		if (existing) return existing;
-
-		const pop = document.createElement('div');
-		pop.id = 'dgca-ext-info-popover';
-		pop.className = 'dgca-ext-info-popover';
-		pop.innerHTML = `
-			<div class="dgca-ext-info-notice">⚠ This is <strong>not</strong> the official extension.</div>
-			<div class="dgca-ext-info-links">
-				<a href="${OFFICIAL_EXTENSION_URL}" target="_blank" rel="noopener noreferrer">
-					🔗 Official eLogBook Extension <span class="dgca-ext-info-arrow">→</span>
-				</a>
-			</div>
-			<div class="dgca-ext-info-credit">
-				Made with ❤️ by <strong class="dgca-ext-shimmer-text dgca-ext-shimmer-text--footer">Gaurav Chetiwal</strong>
-			</div>
-		`;
-		document.body.appendChild(pop);
-		return pop;
+	function showError(text) {
+		if (!toolbarEls) return;
+		toolbarEls.error.textContent = `✗ ${text}`;
+		toolbarEls.error.style.display = 'block';
+		toolbarEls.error.onclick = () => alert(text);
 	}
 
-	function positionInfoPopover(pop, anchorBtn) {
-		const margin = 8;
-		const rect = anchorBtn.getBoundingClientRect();
-		pop.style.visibility = 'hidden';
-		pop.style.display = 'block';
-		const popRect = pop.getBoundingClientRect();
+	function hideError() {
+		if (!toolbarEls) return;
+		toolbarEls.error.style.display = 'none';
+		toolbarEls.error.onclick = null;
+	}
 
-		let left = rect.right - popRect.width;
-		left = Math.min(Math.max(left, margin), window.innerWidth - popRect.width - margin);
-
-		let top = rect.bottom + 6;
-		if (top + popRect.height > window.innerHeight - margin) {
-			top = rect.top - popRect.height - 6; // flip above if no room below
+	function patchRow(index, status, error) {
+		const refs = rowEls[index];
+		if (!refs) return;
+		refs.pill.className = `dgca-ext-row-pill ${STATUS_CLASS[status] || 'pending'}`;
+		refs.pill.textContent = statusLabel(status);
+		const message = status === ROW_STATUS.ERROR ? (error || 'Unknown error') : '';
+		refs.item.title = message;
+		refs.item.classList.toggle('dgca-ext-row--active', status === ROW_STATUS.FILLING);
+		if (refs.detail) {
+			refs.detail.textContent = message;
+			refs.detail.style.display = message ? 'block' : 'none';
 		}
-		top = Math.max(top, margin);
 
-		pop.style.left = `${left}px`;
-		pop.style.top = `${top}px`;
-		pop.style.visibility = 'visible';
-	}
-
-	function closeInfoPopover(pop) {
-		pop.classList.remove('dgca-ext-info-popover--open');
-		pop.style.display = 'none';
-	}
-
-	function toggleInfoPopover(pop, anchorBtn) {
-		if (pop.classList.contains('dgca-ext-info-popover--open')) {
-			closeInfoPopover(pop);
-			return;
+		// Keep the queue list itself following the row being filled.
+		// Do not use item.scrollIntoView(), because that can also scroll the page.
+		if (status === ROW_STATUS.FILLING && activeRowIndex !== index) {
+			activeRowIndex = index;
+			requestAnimationFrame(() => scrollActiveRowIntoView(index));
 		}
-		positionInfoPopover(pop, anchorBtn);
-		pop.classList.add('dgca-ext-info-popover--open');
+	}
+
+	function scrollActiveRowIntoView(index) {
+		const list = toolbarEls?.list;
+		const item = rowEls[index]?.item;
+		if (!list || !item) return;
+		const listRect = list.getBoundingClientRect();
+		const itemRect = item.getBoundingClientRect();
+		if (itemRect.top < listRect.top) {
+			list.scrollTop -= listRect.top - itemRect.top;
+		} else if (itemRect.bottom > listRect.bottom) {
+			list.scrollTop += itemRect.bottom - listRect.bottom;
+		}
+	}
+
+	function renderRows(rows, statuses, errors) {
+		if (!toolbarEls) return;
+		const list = toolbarEls.list;
+		rowEls = [];
+		activeRowIndex = -1;
+		list.innerHTML = rows.map((row, i) => {
+			const status = statuses[i] || ROW_STATUS.PENDING;
+			const duty = String(row.TYPE_OF_DUTY || '').split('(')[0].trim();
+			const station = row.ATS_UNIT ? `${row.RATING || ''} - ${row.ATS_UNIT}`.replace(/^ - | - $/g, '') : '';
+			const error = errors[i] || '';
+			return `<div class="dgca-ext-row" data-row="${i}" title="${escHtml(error)}">
+				<div class="dgca-ext-row-mainline">
+					<div class="dgca-ext-row-main">
+						<span class="dgca-ext-row-num">${i + 1}</span>
+						<span class="dgca-ext-row-date">${escHtml(row.date || row.FROM_DATE || '')}</span>
+						<span class="dgca-ext-row-meta">${escHtml(`${row.START_TIME || ''}–${row.END_TIME || ''}`)}</span>
+						${station ? `<span class="dgca-ext-row-meta">${escHtml(station)}</span>` : ''}
+						${duty ? `<span class="dgca-ext-row-meta">${escHtml(duty)}</span>` : ''}
+					</div>
+					<span class="dgca-ext-row-pill ${STATUS_CLASS[status] || 'pending'}">${statusLabel(status)}</span>
+					${sessionRunning ? '' : `<button type="button" class="dgca-ext-row-delete" data-delete="${i}" title="Remove">×</button>`}
+				</div>
+				<div class="dgca-ext-row-error" style="${status === ROW_STATUS.ERROR && error ? 'display:block' : 'display:none'}">${escHtml(error)}</div>
+			</div>`;
+		}).join('');
+
+		for (const item of list.children) {
+			const index = Number(item.dataset.row);
+			rowEls[index] = {
+				item,
+				pill: item.querySelector('.dgca-ext-row-pill'),
+				detail: item.querySelector('.dgca-ext-row-error'),
+			};
+		}
+	}
+
+	async function readQueue() {
+		try {
+			return await chrome.storage.local.get([
+				'dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors', 'dgca_queue_user',
+				'dgca_wso_ats_mode', 'dgca_wso_custom_text',
+			]);
+		} catch (_) {
+			return {};
+		}
+	}
+
+	async function refreshToolbar(forceRows = true) {
+		if (!toolbarEls) return;
+		const seq = ++refreshSeq;
+		const data = await readQueue();
+		if (seq !== refreshSeq || !toolbarEls) return;
+
+		const rows = data.dgca_pending_rows || [];
+		const statuses = data.dgca_row_status || [];
+		const errors = data.dgca_row_errors || {};
+		const mode = data.dgca_wso_ats_mode || 'custom';
+		const custom = data.dgca_wso_custom_text || 'WSO';
+		const total = rows.length;
+		const done = statuses.reduce((n, s) => n + (s === ROW_STATUS.SUBMITTED ? 1 : 0), 0);
+		const err = statuses.reduce((n, s) => n + (s === ROW_STATUS.ERROR ? 1 : 0), 0);
+		const skipped = statuses.reduce((n, s) => n + (s === ROW_STATUS.SKIPPED ? 1 : 0), 0);
+		const processed = Math.min(total, done + err + skipped);
+		const percent = total ? (processed / total) * 100 : 0;
+
+		toolbarEls.toolbar.classList.toggle('dgca-ext-toolbar--hidden', total === 0);
+		toolbarEls.start.disabled = total === 0 || sessionRunning;
+		toolbarEls.start.style.display = sessionRunning ? 'none' : '';
+		toolbarEls.abort.style.display = sessionRunning ? 'inline-block' : 'none';
+		toolbarEls.clearDone.disabled = sessionRunning || done === 0;
+		toolbarEls.clearAll.disabled = sessionRunning || total === 0;
+		toolbarEls.wsoAts.disabled = sessionRunning;
+		toolbarEls.wsoCustom.disabled = sessionRunning || mode === 'ats';
+		toolbarEls.wsoAts.checked = mode === 'ats';
+		toolbarEls.wsoCustomMode.checked = mode !== 'ats';
+		if (document.activeElement !== toolbarEls.wsoCustom) toolbarEls.wsoCustom.value = custom;
+		toolbarEls.queueTitle.querySelector('span:first-child').textContent = `Queue · ${total} row${total === 1 ? '' : 's'}`;
+		toolbarEls.queueSubtitle.textContent = sessionRunning ? 'Running' : (total ? 'Ready' : 'Waiting');
+		showProgress(total ? `${processed} of ${total} processed · ${done} added · ${err} error${err === 1 ? '' : 's'}` : 'Waiting for queue', percent);
+
+		if (total && rows.every(row => !!row.ATS_EGCA_ID)) {
+			toolbarEls.wsoRow.style.display = 'none';
+			toolbarEls.ids.style.display = '';
+		} else {
+			toolbarEls.wsoRow.style.display = '';
+			toolbarEls.ids.style.display = 'none';
+		}
+
+		if (forceRows) renderRows(rows, statuses, errors);
+	}
+
+	async function deleteRow(index) {
+		if (sessionRunning) return;
+		const data = await readQueue();
+		const rows = data.dgca_pending_rows || [];
+		const statuses = data.dgca_row_status || [];
+		const errors = data.dgca_row_errors || {};
+		if (index < 0 || index >= rows.length) return;
+		if (!confirm(`Remove row ${index + 1} from queue?`)) return;
+		rows.splice(index, 1);
+		statuses.splice(index, 1);
+		const nextErrors = {};
+		for (const [key, value] of Object.entries(errors)) {
+			const n = Number(key);
+			if (n < index) nextErrors[n] = value;
+			else if (n > index) nextErrors[n - 1] = value;
+		}
+		await chrome.storage.local.set({
+			dgca_pending_rows: rows,
+			dgca_row_status: statuses,
+			dgca_row_errors: nextErrors,
+		});
+		if (!rows.length) await chrome.storage.local.remove(['dgca_queue_user']).catch(() => { });
+		refreshToolbar(true);
+	}
+
+	async function clearDone() {
+		if (sessionRunning) return;
+		const data = await readQueue();
+		const rows = data.dgca_pending_rows || [];
+		const statuses = data.dgca_row_status || [];
+		const errors = data.dgca_row_errors || {};
+		const keep = [];
+		const nextStatuses = [];
+		const nextErrors = {};
+		for (let i = 0; i < rows.length; i++) {
+			if (statuses[i] === ROW_STATUS.SUBMITTED) continue;
+			const next = keep.length;
+			keep.push(rows[i]);
+			nextStatuses.push(statuses[i] || ROW_STATUS.PENDING);
+			if (errors[i]) nextErrors[next] = errors[i];
+		}
+		if (keep.length === rows.length) return;
+		await chrome.storage.local.set({
+			dgca_pending_rows: keep,
+			dgca_row_status: nextStatuses,
+			dgca_row_errors: nextErrors,
+		});
+		if (!keep.length) await chrome.storage.local.remove(['dgca_queue_user']).catch(() => { });
+		refreshToolbar(true);
+	}
+
+	async function clearAll() {
+		if (sessionRunning || !confirm('Clear the entire queue?')) return;
+		await chrome.storage.local.remove([
+			'dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors', 'dgca_row_timings', 'dgca_session_ts', 'dgca_queue_user',
+		]).catch(() => { });
+		refreshToolbar(true);
+	}
+
+	function persistMode() {
+		if (!toolbarEls) return;
+		window.clearTimeout(persistMode.timer);
+		persistMode.timer = window.setTimeout(() => {
+			chrome.storage.local.set({
+				dgca_wso_ats_mode: toolbarEls.wsoAts.checked ? 'ats' : 'custom',
+				dgca_wso_custom_text: toolbarEls.wsoCustom.value,
+			}).catch(() => { });
+		}, 200);
 	}
 
 	function buildToolbar(heading) {
-		const existing = heading.querySelector('#dgca-ext-toolbar');
-		if (existing) return existing;
-
-		injectToolbarStyle();
-
+		if (heading.querySelector('#dgca-ext-toolbar')) return;
+		injectStyle();
 		const toolbar = document.createElement('div');
 		toolbar.id = 'dgca-ext-toolbar';
-		toolbar.className = 'dgca-ext-toolbar';
 		toolbar.innerHTML = `
-			<div class="dgca-ext-toolbar-label">
-				<span>✈ <span class="dgca-ext-shimmer-text dgca-ext-shimmer-text--title">eLogBook Assist Extension</span></span>
-				<div class="dgca-ext-toolbar-header-controls">
-					<a class="dgca-ext-video-guide" href="https://youtu.be/xppOqtbQIps" target="_blank" rel="noopener noreferrer">▶ Video Guide</a>
-					<button type="button" class="dgca-ext-iconbtn dgca-ext-info-btn" title="About this extension">ⓘ</button>
-					<button type="button" class="dgca-ext-iconbtn dgca-ext-min-btn" title="Minimize">—</button>
-				</div>
+			<div class="dgca-ext-toolbar-header">
+				<div class="dgca-ext-toolbar-title"><span class="dgca-ext-toolbar-dot"></span><span>eLogBook Filler</span></div>
+				<button type="button" class="dgca-ext-min" aria-label="Minimize toolbar">—</button>
 			</div>
-			<div class="dgca-ext-toolbar-body" id="dgca-ext-toolbar-body">
-				<div class="dgca-ext-divider"></div>
-				<div class="dgca-ext-columns">
-					<div class="dgca-ext-col-left">
-						<div class="dgca-ext-toolbar-row">
-							<button id="dgca-ext-btn-start" type="button">▶ Start Filling</button>
-							<button id="dgca-ext-btn-abort" type="button" style="display:none;">■ Abort</button>
-							<button id="dgca-ext-btn-clear-done" type="button" class="dgca-ext-btn-clear-done">✓ Clear Done</button>
-							<button id="dgca-ext-btn-clear-all" type="button" class="dgca-ext-btn-clear">🗑 Clear All</button>
+			<div class="dgca-ext-toolbar-body">
+				<div class="dgca-ext-layout">
+					<div class="dgca-ext-left">
+						<div class="dgca-ext-controls">
+							<button type="button" id="dgca-ext-start">▶ Start</button>
+							<button type="button" id="dgca-ext-abort" style="display:none">■ Abort</button>
+							<button type="button" id="dgca-ext-clear-done">✓ Clear Done</button>
+							<button type="button" id="dgca-ext-clear-all">🗑 Clear All</button>
 						</div>
-						<div id="dgca-ext-error-pill" class="dgca-ext-error-pill" style="display:none;" title="Click for full error details"></div>
-						<div class="dgca-ext-toolbar-row dgca-ext-wso-row" id="dgca-ext-wso-row">
-							<label class="dgca-ext-wso-option">
-								<input type="radio" name="dgca-ext-wso-ats-mode" id="dgca-ext-wso-ats-mode-ats" value="ats">
-								<strong>ATS</strong>
-							</label>
-							<label class="dgca-ext-wso-option">
-								<input type="radio" name="dgca-ext-wso-ats-mode" id="dgca-ext-wso-ats-mode-custom" value="custom">
-								<input type="text" id="dgca-ext-wso-custom-text" class="dgca-ext-wso-custom-text" value="WSO">
-							</label>
+						<div class="dgca-ext-wso dgca-ext-toolbar-row" id="dgca-ext-wso-row">
+							<label><input type="radio" name="dgca-ext-wso-mode" id="dgca-ext-wso-ats" value="ats"> ATS</label>
+							<label><input type="radio" name="dgca-ext-wso-mode" id="dgca-ext-wso-custom-mode" value="custom"> <input id="dgca-ext-wso-custom" type="text" value="WSO"></label>
 						</div>
-						<div class="dgca-ext-toolbar-row dgca-ext-ats-id-info" id="dgca-ext-ats-id-info" style="display:none;">
-							<span>EGCA-Id: <strong id="dgca-ext-ats-id-value"></strong></span>
-						</div>
-						<div class="dgca-ext-progress-row" id="dgca-ext-progress-row" style="display:none;">
-							<div class="dgca-ext-toolbar-row">
-								<span id="dgca-ext-progress-text" class="dgca-ext-progress-text"></span>
+						<div id="dgca-ext-ids" class="dgca-ext-ids" style="display:none">Using imported EGCA IDs</div>
+						<div id="dgca-ext-progress" class="dgca-ext-progress" role="status" aria-live="polite">
+							<div class="dgca-ext-progress-head">
+								<span id="dgca-ext-progress-text" class="dgca-ext-progress-text">Ready</span>
+								<span id="dgca-ext-progress-percent" class="dgca-ext-progress-percent">0%</span>
 							</div>
-							<div class="dgca-ext-progress-track" id="dgca-ext-progress-track">
-								<div id="dgca-ext-progress-fill-success" class="dgca-ext-progress-fill dgca-ext-progress-fill--success"></div>
-								<div id="dgca-ext-progress-fill-error" class="dgca-ext-progress-fill dgca-ext-progress-fill--error"></div>
+							<div class="dgca-ext-progress-track" aria-hidden="true">
+								<div id="dgca-ext-progress-fill" class="dgca-ext-progress-fill"></div>
 							</div>
 						</div>
-						<div class="dgca-ext-footer">
-							Made with ❤️ by <strong class="dgca-ext-shimmer-text dgca-ext-shimmer-text--footer">Gaurav Chetiwal</strong> © 2026
-							<span class="dgca-ext-footer-version">v<span id="dgca-ext-app-version">…</span></span>
-						</div>
+						<div id="dgca-ext-error" class="dgca-ext-error"></div>
 					</div>
-					<div class="dgca-ext-col-right">
-						<div class="dgca-ext-col-right-label dgca-ext-shimmer-text dgca-ext-shimmer-text--queue" id="dgca-ext-col-right-label">Queue</div>
-						<div class="dgca-ext-row-list" id="dgca-ext-row-list"></div>
+					<div class="dgca-ext-right">
+						<div id="dgca-ext-queue-title" class="dgca-ext-queue-title">
+							<span>Queue</span>
+							<span id="dgca-ext-queue-subtitle" class="dgca-ext-queue-subtitle">Waiting</span>
+						</div>
+						<div id="dgca-ext-row-list" class="dgca-ext-row-list"></div>
 					</div>
 				</div>
-			</div>
-		`;
+			</div>`;
 		heading.appendChild(toolbar);
 
-		const btnStart = toolbar.querySelector('#dgca-ext-btn-start');
-		const btnAbort = toolbar.querySelector('#dgca-ext-btn-abort');
-		const btnClearDone = toolbar.querySelector('#dgca-ext-btn-clear-done');
-		const btnClearAll = toolbar.querySelector('#dgca-ext-btn-clear-all');
-		const wsoAtsModeAts = toolbar.querySelector('#dgca-ext-wso-ats-mode-ats');
-		const wsoAtsModeCustom = toolbar.querySelector('#dgca-ext-wso-ats-mode-custom');
-		const wsoCustomText = toolbar.querySelector('#dgca-ext-wso-custom-text');
-		const wsoRow = toolbar.querySelector('#dgca-ext-wso-row');
-		const atsIdInfo = toolbar.querySelector('#dgca-ext-ats-id-info');
-		const atsIdValue = toolbar.querySelector('#dgca-ext-ats-id-value');
-		const rowList = toolbar.querySelector('#dgca-ext-row-list');
-		const progressRow = toolbar.querySelector('#dgca-ext-progress-row');
-		const progressText = toolbar.querySelector('#dgca-ext-progress-text');
-		const progressFillSuccess = toolbar.querySelector('#dgca-ext-progress-fill-success');
-		const progressFillError = toolbar.querySelector('#dgca-ext-progress-fill-error');
-		const errorPill = toolbar.querySelector('#dgca-ext-error-pill');
-		const colRightLabel = toolbar.querySelector('#dgca-ext-col-right-label');
-		const appVersionEl = toolbar.querySelector('#dgca-ext-app-version');
-		const infoBtn = toolbar.querySelector('.dgca-ext-info-btn');
-		const minBtn = toolbar.querySelector('.dgca-ext-min-btn');
-
-		try {
-			appVersionEl.textContent = chrome.runtime.getManifest().version;
-		} catch (_) { }
-
-		// Minimize — header stays visible, body (columns/footer) collapses.
-		setToolbarMinimized(toolbar, minBtn, loadToolbarMinimized());
-		minBtn.addEventListener('click', () => {
-			setToolbarMinimized(toolbar, minBtn, !toolbar.classList.contains('dgca-ext-toolbar--min'));
-		});
-
-		// Info popover.
-		const infoPopover = buildInfoPopover();
-		infoBtn.addEventListener('click', (e) => {
-			e.stopPropagation();
-			toggleInfoPopover(infoPopover, infoBtn);
-		});
-		document.addEventListener('click', (e) => {
-			if (!infoPopover.classList.contains('dgca-ext-info-popover--open')) return;
-			if (e.target.closest('#dgca-ext-info-popover') || e.target.closest('.dgca-ext-info-btn')) return;
-			closeInfoPopover(infoPopover);
-		});
-		document.addEventListener('keydown', (e) => {
-			if (e.key === 'Escape') closeInfoPopover(infoPopover);
-		});
-		window.addEventListener('resize', () => {
-			if (infoPopover.classList.contains('dgca-ext-info-popover--open')) {
-				positionInfoPopover(infoPopover, infoBtn);
-			}
-		});
-
-		btnClearAll.addEventListener('click', () => {
-			if (_sessionRunning) return;
-			if (!confirm('Clear the entire queue?')) return;
-			window.DGCA_STORAGE.remove([
-				'dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors', 'dgca_row_timings',
-				'dgca_session_ts', 'dgca_queue_user',
-			]).then(() => { _expandedRows.clear(); refreshToolbar(); }).catch(() => { });
-		});
-
-		// Drops only the rows that finished 'submitted', keeping
-		// pending/error/filling ones in place.
-		btnClearDone.addEventListener('click', async () => {
-			if (_sessionRunning) { alert('Cannot clear while session is running.'); return; }
-			let data;
-			try {
-				data = await window.DGCA_STORAGE.get(['dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors', 'dgca_row_timings']);
-			} catch (_) { return; }
-
-			const rows = data?.dgca_pending_rows || [];
-			const statuses = data?.dgca_row_status || [];
-			const errors = data?.dgca_row_errors || {};
-			const timings = data?.dgca_row_timings || {};
-			const keepIndices = rows.map((_, i) => i).filter(i => statuses[i] !== 'submitted');
-			if (keepIndices.length === rows.length) return;
-
-			const newErrors = {};
-			const newTimings = {};
-			keepIndices.forEach((oldIdx, newIdx) => {
-				if (errors[oldIdx]) newErrors[newIdx] = errors[oldIdx];
-				if (timings[oldIdx] != null) newTimings[newIdx] = timings[oldIdx];
-			});
-			const newRows = keepIndices.map(i => rows[i]);
-			const newStatuses = keepIndices.map(i => statuses[i]);
-			const newExpanded = new Set();
-			keepIndices.forEach((oldIdx, newIdx) => { if (_expandedRows.has(oldIdx)) newExpanded.add(newIdx); });
-			_expandedRows = newExpanded;
-
-			try {
-				await window.DGCA_STORAGE.set({
-					dgca_pending_rows: newRows, dgca_row_status: newStatuses,
-					dgca_row_errors: newErrors, dgca_row_timings: newTimings,
-				});
-				if (newRows.length === 0) await window.DGCA_STORAGE.remove(['dgca_queue_user']).catch(() => { });
-				refreshToolbar();
-			} catch (_) { }
-		});
-
-		rowList.addEventListener('click', (e) => {
-			const delBtn = e.target.closest('[data-dgca-delete-idx]');
-			if (delBtn) { deleteToolbarRow(parseInt(delBtn.dataset.dgcaDeleteIdx, 10)); return; }
-			const item = e.target.closest('.dgca-ext-row-item');
-			if (item) { toggleToolbarRowExpand(parseInt(item.dataset.dgcaRowIdx, 10)); return; }
-		});
-
-		btnStart.addEventListener('click', () => {
-			if (_sessionRunning || btnStart.disabled) return;
-			startSession();
-		});
-
-		btnAbort.addEventListener('click', () => {
-			if (!confirm('Abort the current session?')) return;
-			abortSession();
-		});
-
-		function persistWsoAtsMode() {
-			window.DGCA_STORAGE.set({
-				dgca_wso_ats_mode: wsoAtsModeAts.checked ? 'ats' : 'custom',
-				dgca_wso_custom_text: wsoCustomText.value,
-			}).catch(() => { });
-		}
-
-		[wsoAtsModeAts, wsoAtsModeCustom].forEach(radio => {
-			radio.addEventListener('change', () => {
-				wsoCustomText.disabled = wsoAtsModeAts.checked || _sessionRunning;
-				persistWsoAtsMode();
-			});
-		});
-
-		wsoCustomText.addEventListener('input', persistWsoAtsMode);
-		wsoCustomText.addEventListener('focus', () => {
-			if (!wsoAtsModeCustom.checked) wsoAtsModeCustom.click();
-		});
-
-		_toolbarEls = {
-			toolbar, btnStart, btnAbort, btnClearDone, btnClearAll, wsoAtsModeAts, wsoAtsModeCustom, wsoCustomText,
-			wsoRow, atsIdInfo, atsIdValue, rowList, progressRow, progressText,
-			progressFillSuccess, progressFillError, errorPill, colRightLabel,
+		toolbarEls = {
+			toolbar,
+			min: toolbar.querySelector('.dgca-ext-min'),
+			start: toolbar.querySelector('#dgca-ext-start'),
+			abort: toolbar.querySelector('#dgca-ext-abort'),
+			clearDone: toolbar.querySelector('#dgca-ext-clear-done'),
+			clearAll: toolbar.querySelector('#dgca-ext-clear-all'),
+			wsoRow: toolbar.querySelector('#dgca-ext-wso-row'),
+			wsoAts: toolbar.querySelector('#dgca-ext-wso-ats'),
+			wsoCustomMode: toolbar.querySelector('#dgca-ext-wso-custom-mode'),
+			wsoCustom: toolbar.querySelector('#dgca-ext-wso-custom'),
+			ids: toolbar.querySelector('#dgca-ext-ids'),
+			progress: toolbar.querySelector('#dgca-ext-progress'),
+			progressText: toolbar.querySelector('#dgca-ext-progress-text'),
+			progressFill: toolbar.querySelector('#dgca-ext-progress-fill'),
+			progressPercent: toolbar.querySelector('#dgca-ext-progress-percent'),
+			error: toolbar.querySelector('#dgca-ext-error'),
+			queueTitle: toolbar.querySelector('#dgca-ext-queue-title'),
+			queueSubtitle: toolbar.querySelector('#dgca-ext-queue-subtitle'),
+			list: toolbar.querySelector('#dgca-ext-row-list'),
 		};
-		return toolbar;
-	}
 
-	// Reads the logged-in user's display name off the DGCA page's own header,
-	// e.g.:
-	//   <p id="viewRoleDiv" class="...">
-	//     <span>Gaurav Chetiwal</span>
-	//     <span class="sub-text">IATCN2023000468</span>
-	//     <span class="sub-text"><a onclick="fnViewAllRole();">(View Role)</a></span>
-	//   </p>
-	// The name is the one plain (non ".sub-text") span; license number and
-	// the "(View Role)" link both carry .sub-text and are skipped. Read
-	// live on every call rather than cached, since it's cheap and this can
-	// be evaluated before the portal has finished populating the header.
-	function getDgcaPageUserName() {
-		const el = document.querySelector('#viewRoleDiv span:not(.sub-text)');
-		return el ? el.textContent.trim() : '';
-	}
-
-	// ── Progress / session-error display ──────────────────────────────────
-	// Single line now — success/error counts are always folded into `text`
-	// itself (e.g. "Row 3 / 10 — filling — 1 success · 0 error") instead of
-	// living in a separate dedicated stats span next to it.
-	function showToolbarProgress(text) {
-		if (!_toolbarEls?.progressRow) return;
-		_toolbarEls.progressRow.style.display = 'flex';
-		_toolbarEls.progressText.textContent = text;
-	}
-
-	function hideToolbarProgress() {
-		if (!_toolbarEls?.progressRow) return;
-		_toolbarEls.progressRow.style.display = 'none';
-	}
-
-	// Segmented bar: green portion = submitted so far, red portion = errors so
-	// far, both as a share of the total queued rows. Shimmer only plays while
-	// a session is actually running — a completed/idle bar stays still.
-	function updateToolbarProgressBar(done, errCnt, total) {
-		if (!_toolbarEls?.progressFillSuccess) return;
-		const safeTotal = total > 0 ? total : 1;
-		_toolbarEls.progressFillSuccess.style.width = `${(done / safeTotal) * 100}%`;
-		_toolbarEls.progressFillError.style.width = `${(errCnt / safeTotal) * 100}%`;
-		_toolbarEls.progressFillSuccess.classList.toggle('dgca-ext-progress-fill--active', _sessionRunning);
-		_toolbarEls.progressFillError.classList.toggle('dgca-ext-progress-fill--active', _sessionRunning);
-	}
-
-	function showToolbarError(msg) {
-		if (!_toolbarEls?.errorPill) return;
-		const { errorPill } = _toolbarEls;
-		errorPill.textContent = `✗ ${msg}`;
-		errorPill.style.display = 'block';
-		errorPill.onclick = () => alert(msg);
-	}
-
-	function hideToolbarError() {
-		if (!_toolbarEls?.errorPill) return;
-		_toolbarEls.errorPill.style.display = 'none';
-		_toolbarEls.errorPill.onclick = null;
-	}
-
-	// ── Row delete (via the storage bridge) ──────────────────────────────────
-	async function deleteToolbarRow(index) {
-		if (_sessionRunning) { alert('Cannot remove rows while session is running.'); return; }
-		let data;
-		try {
-			data = await window.DGCA_STORAGE.get(['dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors', 'dgca_row_timings']);
-		} catch (_) { return; }
-
-		const rows = data?.dgca_pending_rows || [];
-		const statuses = data?.dgca_row_status || [];
-		const errors = data?.dgca_row_errors || {};
-		const timings = data?.dgca_row_timings || {};
-		if (index < 0 || index >= rows.length) return;
-
-		if (!confirm(`Remove row ${index + 1} (${rows[index]?.date || ''}) from queue?`)) return;
-
-		rows.splice(index, 1);
-		statuses.splice(index, 1);
-		const newErrors = {};
-		const newTimings = {};
-		Object.keys(errors).forEach(k => {
-			const ki = parseInt(k, 10);
-			if (ki < index) newErrors[ki] = errors[ki];
-			else if (ki > index) newErrors[ki - 1] = errors[ki];
+		setMinimized(minimizedState());
+		toolbarEls.min.addEventListener('click', () => setMinimized(!toolbar.classList.contains('dgca-ext-toolbar--min')));
+		toolbarEls.start.addEventListener('click', startSession);
+		toolbarEls.abort.addEventListener('click', () => {
+			if (confirm('Abort the current session?')) abortSession();
 		});
-		Object.keys(timings).forEach(k => {
-			const ki = parseInt(k, 10);
-			if (ki < index) newTimings[ki] = timings[ki];
-			else if (ki > index) newTimings[ki - 1] = timings[ki];
+		toolbarEls.clearDone.addEventListener('click', clearDone);
+		toolbarEls.clearAll.addEventListener('click', clearAll);
+		toolbarEls.list.addEventListener('click', e => {
+			const button = e.target.closest('[data-delete]');
+			if (button) deleteRow(Number(button.dataset.delete));
 		});
-		const newExpanded = new Set();
-		_expandedRows.forEach(ei => {
-			if (ei < index) newExpanded.add(ei);
-			else if (ei > index) newExpanded.add(ei - 1);
+		toolbarEls.wsoAts.addEventListener('change', persistMode);
+		toolbarEls.wsoCustomMode.addEventListener('change', persistMode);
+		toolbarEls.wsoCustom.addEventListener('focus', () => {
+			if (!toolbarEls.wsoCustomMode.checked) toolbarEls.wsoCustomMode.click();
 		});
-		_expandedRows = newExpanded;
-
-		try {
-			await window.DGCA_STORAGE.set({
-				dgca_pending_rows: rows, dgca_row_status: statuses,
-				dgca_row_errors: newErrors, dgca_row_timings: newTimings,
-			});
-			if (rows.length === 0) {
-				await window.DGCA_STORAGE.remove(['dgca_queue_user']).catch(() => { });
-			}
-			refreshToolbar();
-		} catch (_) { }
+		toolbarEls.wsoCustom.addEventListener('input', persistMode);
+		syncToolbarSessionState();
 	}
 
-	// Row-status pill vocabulary — owned entirely by this toolbar, the sole
-	// queue UI. ROW_STATUS itself comes from shared.js since the EGCA-export
-	// injector also writes 'pending' when it queues rows, but the display
-	// strings/classes below have exactly one consumer.
-	const { ROW_STATUS } = window.DGCA;
-	const PILL_CLASS = {
-		[ROW_STATUS.PENDING]: 'dgca-ext-pill--pending',
-		[ROW_STATUS.FILLING]: 'dgca-ext-pill--filling',
-		[ROW_STATUS.SUBMITTED]: 'dgca-ext-pill--submitted',
-		[ROW_STATUS.ERROR]: 'dgca-ext-pill--error',
-		[ROW_STATUS.SKIPPED]: 'dgca-ext-pill--skipped',
-	};
-	const PILL_LABEL = {
-		[ROW_STATUS.PENDING]: 'Pending',
-		[ROW_STATUS.FILLING]: 'Filling…',
-		[ROW_STATUS.SUBMITTED]: '✓ Added',
-		[ROW_STATUS.ERROR]: '✗ Error',
-		[ROW_STATUS.SKIPPED]: '— Skip',
-	};
-	// Text shown in the expanded detail box for non-error statuses. (Error
-	// rows show the actual captured error message instead.)
-	const DETAIL_TEXT = {
-		[ROW_STATUS.PENDING]: 'Pending',
-		[ROW_STATUS.FILLING]: 'In Progress',
-		[ROW_STATUS.SUBMITTED]: 'Added Successfully',
-		[ROW_STATUS.SKIPPED]: 'Skipped',
-	};
-
-	// Rows that were still pending/filling when the last session was
-	// aborted read as "Stopped" instead of their normal label — reuses
-	// _aborted (set in abortSession(), cleared at the top of runSession())
-	// rather than a separate flag, since that's exactly the window we want.
-	function displayPillClass(status) {
-		if (_aborted && (status === ROW_STATUS.PENDING || status === ROW_STATUS.FILLING)) {
-			return PILL_CLASS[ROW_STATUS.PENDING];
-		}
-		return PILL_CLASS[status] || PILL_CLASS[ROW_STATUS.PENDING];
-	}
-	function displayPillLabel(status) {
-		if (_aborted && (status === ROW_STATUS.PENDING || status === ROW_STATUS.FILLING)) {
-			return 'Stopped';
-		}
-		return PILL_LABEL[status] || PILL_LABEL[ROW_STATUS.PENDING];
-	}
-
-
-	let _lastRenderedRows = [];
-	let _lastRenderedStatuses = [];
-	let _lastRenderedErrors = {};
-	let _lastRenderedTimings = {};
-
-	// Card markup: date/time/ATS/duty/instructor/trainee chips + status
-	// pill. Every card is expandable — click anywhere on it (except the
-	// delete button) to show a status detail line, with the full error text
-	// for error rows.
-	function buildRowItemHtml(row, i, status, error, timing, { showDelete, expanded }) {
-		const raw = row; // flat, keyed by the EGCA table's own header names
-		const pillClass = displayPillClass(status);
-		const pillLabel = displayPillLabel(status);
-
-		const atsHtml = raw['ATS_UNIT']
-			? `<span class="dgca-ext-row-item__num" style="color:#4fc3f7;">${escHtml(`${raw['RATING']} - ${raw['ATS_UNIT']}`)}</span>` : '';
-		const dutyShort = raw['TYPE_OF_DUTY'] ? raw['TYPE_OF_DUTY'].split('(')[0].trim() : '';
-		const dutyHtml = dutyShort
-			? `<span class="dgca-ext-row-item__num" title="${escHtml(raw['TYPE_OF_DUTY'] || '')}">${escHtml(dutyShort)}</span>` : '';
-		let instrHtml = '';
-		if (raw['INSTRUCTOR_LICENSE']) {
-			instrHtml = `<span class="dgca-ext-row-item__num" style="color:#ba68c8;font-style:italic;" title="Instructor">👤 ${escHtml(raw['INSTRUCTOR_NAME'])}</span>`;
-		}
-		let traineeHtml = '';
-		if (raw['TRAINEE_LICENSE']) {
-			const label = raw['TRAINEE_NAME'] ? `${raw['TRAINEE_NAME']} (${raw['TRAINEE_LICENSE']})` : raw['TRAINEE_LICENSE'];
-			traineeHtml = `<span class="dgca-ext-row-item__num" style="color:#66bb6a;font-style:italic;" title="Trainee">🎓 ${escHtml(label)}</span>`;
-		}
-
-		// "Time to add" badge — debugging/perf monitoring. Hidden (empty,
-		// display:none) until this row has actually been processed at least
-		// once; updateToolbarRowStatus() patches it in place afterwards so
-		// a full re-render isn't needed just to show the number.
-		const hasTiming = timing != null;
-		const durationClass = `dgca-ext-row-item__duration${hasTiming && timing < 10000 ? ' dgca-ext-row-item__duration--fast' : ''}`;
-		const timeToAddHtml = `<span class="${durationClass}" id="dgca-ext-time-${i}"
-			title="Time to fill + Add this row"${hasTiming ? '' : ' style="display:none;"'}>${hasTiming ? `⏱ ${escHtml(formatDuration(timing))}` : ''}</span>`;
-
-		const pillHtml = `<span id="dgca-ext-pill-${i}" class="dgca-ext-pill ${pillClass}">${pillLabel}</span>`;
-
-		const deleteHtml = showDelete
-			? `<button type="button" class="dgca-ext-row-item__delete" data-dgca-delete-idx="${i}" title="Remove from queue">×</button>` : '';
-
-		const detailText = status === 'error' ? (error || 'Unknown error') : (DETAIL_TEXT[status] || '');
-		const detailHtml = expanded
-			? `<div class="dgca-ext-row-item__detail dgca-ext-row-item__detail--${status}">${escHtml(detailText)}</div>`
-			: '';
-		const itemClass = `dgca-ext-row-item${expanded ? ' dgca-ext-row-item--expanded' : ''}${status === 'filling' ? ' dgca-ext-row-item--active' : ''}`;
-
-		return `
-			<div class="${itemClass}" id="dgca-ext-row-item-${i}" data-dgca-row-idx="${i}">
-				<div class="dgca-ext-row-item__main">
-					<div class="dgca-ext-row-item__info">
-						<span class="dgca-ext-row-item__num">${i + 1}</span>
-						<span class="dgca-ext-row-item__date">${escHtml(row.date || raw['FROM_DATE'] || '')}</span>
-						<span class="dgca-ext-row-item__time">${escHtml(raw['START_TIME'])}–${escHtml(raw['END_TIME'])}</span>
-						${atsHtml}${dutyHtml}${instrHtml}${traineeHtml}${timeToAddHtml}
-					</div>
-					${pillHtml}
-					${deleteHtml}
-				</div>
-				${detailHtml}
-			</div>
-		`;
-	}
-
-	function renderToolbarRowList(rows, statuses, errors, timings) {
-		if (!_toolbarEls) return;
-		_lastRenderedRows = rows;
-		_lastRenderedStatuses = statuses;
-		_lastRenderedErrors = errors;
-		_lastRenderedTimings = timings || {};
-
-		const { rowList } = _toolbarEls;
-		if (rows.length === 0) {
-			rowList.innerHTML = '';
-			return;
-		}
-
-		if (rowList.children.length === rows.length) {
-			rows.forEach((row, i) => patchRowItem(i, statuses[i] || 'pending', errors[i], _lastRenderedTimings[i]));
-			return;
-		}
-
-		rowList.innerHTML = rows.map((row, i) => buildRowItemHtml(row, i, statuses[i] || 'pending', errors[i], _lastRenderedTimings[i], {
-			showDelete: !_sessionRunning,
-			expanded: _expandedRows.has(i),
-		})).join('');
-	}
-
-	function patchRowItem(i, status, error, timing) {
-		const item = document.getElementById(`dgca-ext-row-item-${i}`);
-		if (!item) return;
-
-		const pill = document.getElementById(`dgca-ext-pill-${i}`);
-		if (pill) {
-			pill.className = `dgca-ext-pill ${displayPillClass(status)}`;
-			pill.textContent = displayPillLabel(status);
-		}
-
-		item.classList.toggle('dgca-ext-row-item--active', status === 'filling');
-
-		const showDelete = !_sessionRunning;
-		const deleteBtn = item.querySelector('.dgca-ext-row-item__delete');
-		if (showDelete && !deleteBtn) {
-			const btn = document.createElement('button');
-			btn.className = 'dgca-ext-row-item__delete';
-			btn.dataset.dgcaDeleteIdx = String(i);
-			btn.title = 'Remove from queue';
-			btn.textContent = '×';
-			item.querySelector('.dgca-ext-row-item__main')?.appendChild(btn);
-		} else if (!showDelete && deleteBtn) {
-			deleteBtn.remove();
-		}
-
-		if (_expandedRows.has(i)) {
-			item.classList.add('dgca-ext-row-item--expanded');
-			const detailText = status === 'error' ? (error || 'Unknown error') : (DETAIL_TEXT[status] || '');
-			let detail = item.querySelector('.dgca-ext-row-item__detail');
-			if (!detail) {
-				detail = document.createElement('div');
-				item.appendChild(detail);
-			}
-			detail.className = `dgca-ext-row-item__detail dgca-ext-row-item__detail--${status}`;
-			detail.textContent = detailText;
-		} else {
-			item.classList.remove('dgca-ext-row-item--expanded');
-			item.querySelector('.dgca-ext-row-item__detail')?.remove();
-		}
-
-		if (timing != null) {
-			const timeEl = document.getElementById(`dgca-ext-time-${i}`);
-			if (timeEl) {
-				timeEl.textContent = `⏱ ${formatDuration(timing)}`;
-				timeEl.classList.toggle('dgca-ext-row-item__duration--fast', timing < 10000);
-				timeEl.style.display = '';
-			}
-		}
-	}
-
-	function toggleToolbarRowExpand(index) {
-		if (_expandedRows.has(index)) _expandedRows.delete(index);
-		else _expandedRows.add(index);
-
-		const status = _lastRenderedStatuses[index] || 'pending';
-		const error = _lastRenderedErrors[index];
-		patchRowItem(index, status, error, _lastRenderedTimings[index]);
-	}
-
-
-	function updateToolbarRowStatus(index, status, error, elapsedMs) {
-		if (!_toolbarEls) return;
-		_lastRenderedStatuses[index] = status;
-		if (error) _lastRenderedErrors[index] = error;
-		else delete _lastRenderedErrors[index];
-		if (elapsedMs != null) _lastRenderedTimings[index] = elapsedMs;
-
-		patchRowItem(index, status, error, elapsedMs);
-
-		if (status === 'filling') {
-			scrollRowListToItem(index);
-		}
-	}
-
-	// Scrolls only the toolbar's own row-list container to bring the given
-	// row into view — never the page/window. scrollIntoView({block:'nearest'})
-	// looks tempting here, but it walks every scrollable ancestor including
-	// the page itself, so if the user had scrolled away to check something
-	// else, a newly-filling row would yank the whole page back to the
-	// toolbar. Comparing bounding rects and adjusting rowList.scrollTop
-	// directly keeps the scroll change contained to the queue list.
-	function scrollRowListToItem(index) {
-		const { rowList } = _toolbarEls || {};
-		const itemEl = document.getElementById(`dgca-ext-row-item-${index}`);
-		if (!rowList || !itemEl) return;
-
-		const itemRect = itemEl.getBoundingClientRect();
-		const listRect = rowList.getBoundingClientRect();
-
-		if (itemRect.top < listRect.top) {
-			rowList.scrollTop -= (listRect.top - itemRect.top);
-		} else if (itemRect.bottom > listRect.bottom) {
-			rowList.scrollTop += (itemRect.bottom - listRect.bottom);
-		}
-	}
-
-	let _refreshSeq = 0;
-
-	async function refreshToolbar() {
-		if (!_toolbarEls) return;
-		const mySeq = ++_refreshSeq;
-		const {
-			toolbar, btnStart, btnAbort, btnClearDone, btnClearAll, wsoAtsModeAts, wsoAtsModeCustom, wsoCustomText,
-			wsoRow, atsIdInfo, atsIdValue, colRightLabel,
-		} = _toolbarEls;
-
-		let rows = [], statuses = [], errors = {}, timings = {}, queueUser = null, wsoAtsMode = 'custom', wsoCustom = 'WSO';
-		try {
-			const data = await window.DGCA_STORAGE.get([
-				'dgca_pending_rows', 'dgca_row_status', 'dgca_row_errors', 'dgca_row_timings', 'dgca_queue_user',
-				'dgca_wso_ats_mode', 'dgca_wso_custom_text',
-			]);
-			rows = data?.dgca_pending_rows || [];
-			statuses = data?.dgca_row_status || [];
-			errors = data?.dgca_row_errors || {};
-			timings = data?.dgca_row_timings || {};
-			queueUser = data?.dgca_queue_user || null;
-			wsoAtsMode = data?.dgca_wso_ats_mode || 'custom';
-			wsoCustom = data?.dgca_wso_custom_text || 'WSO';
-		} catch (_) { }
-
-		if (mySeq !== _refreshSeq || !_toolbarEls) return;
-
-		const total = rows.length;
-		const done = statuses.filter(s => s === 'submitted').length;
-
-		// Right column header: "Queue - <name> (IAMATC) - <name> (EGCA) - <n> rows"
-		// The IAMATC name is whoever built the queue on the AAI EGCA-export
-		// page (dgca_queue_user, set by injector-egcaexport.js); the EGCA
-		// name is whoever is logged into *this* DGCA page right now, read
-		// live from its own header markup — see getDgcaPageUserName().
-		if (colRightLabel) {
-			const iamatcWho = queueUser && (queueUser.name || queueUser.loginId);
-			const egcaWho = getDgcaPageUserName();
-			const rowsSuffix = `${total} row${total === 1 ? '' : 's'}`;
-			const parts = ['Queue'];
-			if (iamatcWho) parts.push(`${iamatcWho} (IAMATC)`);
-			if (egcaWho) parts.push(`${egcaWho} (EGCA)`);
-			parts.push(rowsSuffix);
-			colRightLabel.textContent = parts.join(' - ');
-		}
-
-		if (total === 0) {
-			hideToolbarProgress();
-			hideToolbarError();
-		}
-
-		// Nothing queued — hide the whole toolbar rather than show an
-		// empty shell. It reappears the moment a row is imported (this
-		// runs again via the dgca_pending_rows storage listener).
-		toolbar.classList.toggle('dgca-ext-toolbar--hidden', total === 0);
-
-		btnClearDone.disabled = _sessionRunning || !statuses.some(s => s === 'submitted');
-
-		btnStart.disabled = total === 0 || _sessionRunning;
-		btnStart.style.display = _sessionRunning ? 'none' : 'inline-block';
-		btnAbort.style.display = _sessionRunning ? 'inline-block' : 'none';
-
-		// If every queued row already carries its own EGCA-Id, show that
-		// instead of the WSO/ATS toggle — the
-		// portal will match by exact text for all of them regardless.
-		const allHaveAtsId = total > 0 && rows.every(r => !!r['ATS_EGCA_ID']);
-		if (allHaveAtsId) {
-			wsoRow.style.display = 'none';
-			atsIdValue.textContent = "Imported from IAMATC";
-			atsIdInfo.style.display = 'flex';
-		} else {
-			wsoRow.style.display = 'flex';
-			atsIdInfo.style.display = 'none';
-
-			// Don't stomp on a field the user is actively typing in.
-			const useAts = wsoAtsMode === 'ats';
-			if (document.activeElement !== wsoCustomText) wsoCustomText.value = wsoCustom;
-			wsoAtsModeAts.checked = useAts;
-			wsoAtsModeCustom.checked = !useAts;
-
-			wsoAtsModeAts.disabled = _sessionRunning;
-			wsoAtsModeCustom.disabled = _sessionRunning;
-			wsoCustomText.disabled = _sessionRunning || useAts;
-		}
-
-		btnClearAll.disabled = total === 0 || _sessionRunning;
-
-		// ── Row list — same card layout whether idle, running, or showing
-		// results; rows never disappear, only their pill updates.
-		renderToolbarRowList(rows, statuses, errors, timings);
-	}
-
-	// Holds the last-found Logbook panel heading so repeat calls (fired by
-	// unrelated DOM churn elsewhere in #contWrapper, e.g. DataTables redraws)
-	// can skip the document-wide `querySelectorAll('h5.panel-title')` scan
-	// entirely when the heading we already have is still attached.
-	let _cachedHeading = null;
-
-	function setupInlineToolbar() {
-		if (!isOnEntryPage()) {
-			document.getElementById('dgca-ext-toolbar')?.remove();
-			_toolbarEls = null;
-			_cachedHeading = null;
-			return false;
-		}
-		if (_cachedHeading && _cachedHeading.isConnected) {
-			if (!_cachedHeading.querySelector('#dgca-ext-toolbar')) {
-				buildToolbar(_cachedHeading);
-				refreshToolbar();
-			}
-			return true;
-		}
-		const heading = findLogbookHeading();
-		if (!heading) {
-			_cachedHeading = null;
-			return false;
-		}
-		_cachedHeading = heading;
-		const alreadyPresent = !!heading.querySelector('#dgca-ext-toolbar');
-		buildToolbar(heading);
-		if (!alreadyPresent) refreshToolbar();
-		return true;
-	}
-
-	setupInlineToolbar();
-	let _observerScheduled = false;
-
-	// Narrow the observed root: #contWrapper holds the breadcrumb + the whole
-	// panel stack (Basic/Medical/Rating/.../Logbook). It excludes the sidebar
-	// menu tree, which is static and never contains the Logbook heading, so
-	// mutations there are never worth a rescan.
-	const _observeRoot = document.getElementById('contWrapper') || document.body;
-
-	// Cheap pre-check run on every raw MutationRecord batch, before scheduling
-	// any work. DataTables (search/paging/redraw) and other widgets inside
-	// #contWrapper churn the DOM independently of navigation; most of those
-	// bursts can't possibly affect the Logbook panel or the toolbar, so we
-	// skip straight past them instead of paying for a full setupInlineToolbar()
-	// pass on every one.
-	function _mutationsLookRelevant(mutations) {
-		// If we've already found the heading but it's since been detached
-		// (e.g. the panel stack got replaced wholesale on navigation), that's
-		// always worth a rescan regardless of what the mutation records say.
-		if (_cachedHeading && !_cachedHeading.isConnected) return true;
-
-		for (const m of mutations) {
-			for (const n of m.addedNodes) {
-				if (n.nodeType !== 1) continue;
-				if (n.id === 'dgca-ext-toolbar') return true;
-				if (typeof n.matches === 'function' && n.matches('.panel-heading, h5.panel-title')) return true;
-				if (typeof n.querySelector === 'function' && n.querySelector('h5.panel-title, #dgca-ext-toolbar')) return true;
-			}
-		}
-		return false;
-	}
-
-	const _toolbarObserver = new MutationObserver((mutations) => {
-		if (_observerScheduled) return;
-		if (!_mutationsLookRelevant(mutations)) return;
-		_observerScheduled = true;
-		const raf = window.requestAnimationFrame
-			? (cb) => window.requestAnimationFrame(cb)
-			: (cb) => setTimeout(cb, 16);
-		raf(() => {
-			_observerScheduled = false;
-			setupInlineToolbar();
-		});
-	});
-	_toolbarObserver.observe(_observeRoot, { childList: true, subtree: true });
-
-	// Keeps the toolbar in sync with queue changes made elsewhere: the
-	// popup's Clear All, or the EGCA-export injector adding rows or clearing
-	// the queue from its own page.
-	window.DGCA_STORAGE.onChanged((changes) => {
-		if (changes.dgca_pending_rows || changes.dgca_queue_user || (changes.dgca_row_status && !_sessionRunning)) {
-			refreshToolbar();
-		}
-	});
-
-	async function runSession(rows) {
-		_sessionRunning = true;
-		notifySessionState(true);
-		_aborted = false;
-		_expandedRows.clear();
-		hideToolbarError();
-
-		// Reset every row to 'pending' and clear stale errors/timings from
-		// a previous session, and AWAIT that write, before the first
-		// refreshToolbar() call below. refreshToolbar() reads status fresh
-		// from storage each time it's called — call it before this write
-		// lands and it's a race: it can (and, per report, often does) read
-		// back last session's still-present 'submitted'/'error' statuses,
-		// leaving stale pills showing for every row not yet reached by the
-		// loop further down.
-		const statuses = rows.map(() => 'pending');
-		const errors = {};
-		const timings = {};
-		await window.DGCA_STORAGE.set({
-			dgca_row_status: statuses,
-			dgca_row_errors: errors,
-			dgca_row_timings: timings,
-		});
-
-		showToolbarProgress('Starting…');
-		updateToolbarProgressBar(0, 0, rows.length);
-		refreshToolbar();
-
-		// The toolbar's own DOM churn during a fill (resetFields, field
-		// updates, row-status pills) all happens under #contWrapper and would
-		// otherwise get picked up by _toolbarObserver on every row. Nothing
-		// during a session needs the observer — all toolbar updates here go
-		// through direct refreshToolbar()/updateToolbarRowStatus() calls, not
-		// observer-triggered rescans — so disconnect for the duration.
-		_toolbarObserver.disconnect();
-
-		try {
-			const _wsoAtsData = await window.DGCA_STORAGE.get(['dgca_wso_ats_mode', 'dgca_wso_custom_text']).catch(() => ({}));
-			const wsoAtsText = (_wsoAtsData?.dgca_wso_ats_mode === 'ats')
-				? 'ATS'
-				: (_wsoAtsData?.dgca_wso_custom_text || 'WSO');
-
-			for (let i = 0; i < rows.length; i++) {
-				if (_aborted) break;
-
-				const row = rows[i];
-				statuses[i] = 'filling';
-				await window.DGCA_STORAGE.set({ dgca_row_status: [...statuses] });
-				updateToolbarRowStatus(i, 'filling');
-				const doneBefore = statuses.filter(s => s === 'submitted').length;
-				const errBefore = statuses.filter(s => s === 'error').length;
-				showToolbarProgress(`Row ${i + 1} / ${rows.length} — filling — ${doneBefore} success · ${errBefore} error`);
-				updateToolbarProgressBar(doneBefore, errBefore, rows.length);
-
-				// Timer starts right after the 'filling' status flip, so it
-				// measures the same "in-flight" window the pill/glow shimmer is
-				// shown for — reset through to clickAddAndVerify()'s resolve.
-				// Used purely for debugging/perf monitoring (surfaced as the
-				// ⏱ badge on each row card), not for any control-flow decision.
-				const rowStartedAt = performance.now();
-
-				try { await resetFields(); } catch (_) { }
-
-				if (_aborted) break;
-
-				try {
-					await fillRow(row, wsoAtsText);
-					if (_aborted) break;
-
-					const result = await clickAddAndVerify();
-					const elapsedMs = performance.now() - rowStartedAt;
-					timings[i] = elapsedMs;
-
-					if (result.ok) {
-						statuses[i] = 'submitted';
-						updateToolbarRowStatus(i, 'submitted', null, elapsedMs);
-					} else {
-						statuses[i] = 'error';
-						errors[i] = result.error;
-						updateToolbarRowStatus(i, 'error', result.error, elapsedMs);
-					}
-				} catch (err) {
-					const elapsedMs = performance.now() - rowStartedAt;
-					timings[i] = elapsedMs;
-					statuses[i] = 'error';
-					errors[i] = err.message;
-					updateToolbarRowStatus(i, 'error', err.message, elapsedMs);
-				}
-
-				await window.DGCA_STORAGE.set({
-					dgca_row_status: [...statuses],
-					dgca_row_errors: { ...errors },
-					dgca_row_timings: { ...timings },
-				});
-
-				const doneSoFar = statuses.filter(s => s === 'submitted').length;
-				const errSoFar = statuses.filter(s => s === 'error').length;
-				showToolbarProgress(`Row ${i + 1} / ${rows.length} — ${statuses[i]} — ${doneSoFar} success · ${errSoFar} error`);
-				updateToolbarProgressBar(doneSoFar, errSoFar, rows.length);
-			}
-
-			_sessionRunning = false;
-			notifySessionState(false);
-			refreshToolbar();
-
-			const done = statuses.filter(s => s === 'submitted').length;
-			const errCnt = statuses.filter(s => s === 'error').length;
-			updateToolbarProgressBar(done, errCnt, rows.length);
-			if (!_aborted) showToolbarProgress(`Done — ${done} success, ${errCnt} error`);
-			else showToolbarProgress(`Aborted — ${done} success, ${errCnt} error`);
-		} finally {
-			// Always resume watching for SPA navigation/re-renders, even if
-			// the loop above threw — otherwise a mid-session error would
-			// leave the toolbar unable to re-mount itself after navigation.
-			_toolbarObserver.observe(_observeRoot, { childList: true, subtree: true });
-		}
-	}
-
-	// Sanity check before a session starts: the IAMATC name (whoever built
-	// the queue on the AAI EGCA-export page, dgca_queue_user) should be the
-	// same person as the EGCA name (whoever is logged into *this* DGCA page
-	// right now, per getDgcaPageUserName()). A mismatch usually means the
-	// queue was built under one login and is about to be filled under
-	// another. namesMatch() already tolerates whitespace/salutation-only
-	// differences, so this only fires on a genuine mismatch.
-	async function confirmNamesMatchOrAbort() {
+	async function confirmNamesMatch() {
 		let queueUser = null;
 		try {
-			const data = await window.DGCA_STORAGE.get(['dgca_queue_user']);
-			queueUser = data?.dgca_queue_user || null;
+			const data = await chrome.storage.local.get(['dgca_queue_user']);
+			queueUser = data.dgca_queue_user || null;
 		} catch (_) { }
+		const source = queueUser && (queueUser.name || queueUser.loginId);
+		const target = document.querySelector('#viewRoleDiv span:not(.sub-text)')?.textContent.trim() || '';
+		if (!source || !target || namesMatch(source, target)) return true;
+		return confirm(`Queue user: "${source}"\nDGCA user: "${target}"\n\nContinue filling anyway?`);
+	}
 
-		const iamatcWho = queueUser && (queueUser.name || queueUser.loginId);
-		const egcaWho = getDgcaPageUserName();
+	async function runSession(rows) {
+		notifySessionState(true);
+		aborted = false;
+		stationCache.clear();
+		hideError();
+		const statuses = rows.map(() => ROW_STATUS.PENDING);
+		const errors = {};
+		let done = 0;
+		let errCount = 0;
 
-		if (!iamatcWho || !egcaWho) return true; // nothing to compare, proceed
-		if (namesMatch(iamatcWho, egcaWho)) return true;
+		await chrome.storage.local.set({ dgca_row_status: statuses, dgca_row_errors: errors }).catch(() => { });
+		showProgress(`0 of ${rows.length} processed · 0 added · 0 errors`, 0);
 
-		return confirm(
-			`The queue was built as "${iamatcWho}" (IAMATC) but you're logged in ` +
-			`as "${egcaWho}" (EGCA) on this DGCA page — these names look different.\n\n` +
-			`Continue filling anyway?`
-		);
+		const data = await chrome.storage.local.get(['dgca_wso_ats_mode', 'dgca_wso_custom_text']).catch(() => ({}));
+		const wsoAtsText = data.dgca_wso_ats_mode === 'ats' ? 'ATS' : (data.dgca_wso_custom_text || 'WSO');
+
+		for (let i = 0; i < rows.length; i++) {
+			if (aborted) break;
+			if (i === 0 || statuses[i - 1] !== ROW_STATUS.SUBMITTED) resetFields();
+			statuses[i] = ROW_STATUS.FILLING;
+			patchRow(i, ROW_STATUS.FILLING);
+			showProgress(`Row ${i + 1}/${rows.length} · ${done} added · ${errCount} errors`, (i / rows.length) * 100);
+
+			try {
+				await fillRow(rows[i], wsoAtsText);
+				if (aborted) break;
+				const result = await clickAddAndVerify();
+				if (result.ok) {
+					statuses[i] = ROW_STATUS.SUBMITTED;
+					done++;
+					patchRow(i, ROW_STATUS.SUBMITTED);
+				} else {
+					statuses[i] = ROW_STATUS.ERROR;
+					errors[i] = result.error;
+					errCount++;
+					patchRow(i, ROW_STATUS.ERROR, result.error);
+				}
+			} catch (error) {
+				statuses[i] = ROW_STATUS.ERROR;
+				errors[i] = error?.message || String(error);
+				errCount++;
+				patchRow(i, ROW_STATUS.ERROR, errors[i]);
+			}
+
+			await chrome.storage.local.set({
+				dgca_row_status: statuses.slice(),
+				dgca_row_errors: { ...errors },
+			}).catch(() => { });
+			showProgress(`Row ${i + 1}/${rows.length} · ${done} added · ${errCount} errors`, ((i + 1) / rows.length) * 100);
+		}
+
+		notifySessionState(false);
+		await refreshToolbar(true);
+		showProgress(aborted ? `Aborted · ${done} added · ${errCount} errors` : `Done · ${done} added · ${errCount} errors`, aborted ? ((done + errCount) / rows.length) * 100 : 100);
 	}
 
 	async function startSession() {
-		if (_sessionRunning) return;
-		hideToolbarError();
-		let rows = [];
-		try {
-			const data = await window.DGCA_STORAGE.get(['dgca_pending_rows']);
-			rows = data?.dgca_pending_rows || [];
-		} catch (err) {
-			showToolbarProgress('Start failed');
-			showToolbarError(`Storage error: ${err.message}`);
+		if (sessionRunning) return;
+		hideError();
+		const data = await chrome.storage.local.get(['dgca_pending_rows']).catch(() => ({}));
+		const rows = data.dgca_pending_rows || [];
+		if (!rows.length) {
+			showError('No rows queued.');
 			return;
 		}
-		if (rows.length === 0) {
-			showToolbarProgress('Start failed');
-			showToolbarError('No rows queued.');
-			return;
-		}
-		if (!(await confirmNamesMatchOrAbort())) {
-			showToolbarProgress('Start cancelled');
-			return;
-		}
+		if (!(await confirmNamesMatch())) return;
 		try {
 			await runSession(rows);
-		} catch (err) {
-			_sessionRunning = false;
+		} catch (error) {
 			notifySessionState(false);
-			refreshToolbar();
-			showToolbarProgress('Session failed');
-			showToolbarError(err.message);
+			showError(error?.message || String(error));
+			refreshToolbar(true);
 		}
 	}
 
 	function abortSession() {
-		if (!_sessionRunning) return;
-		// Don't hide the progress panel here — runSession's loop notices
-		// _aborted on its next iteration and reports the final "Aborted —
-		// N success, N error" stats itself, which is what we want to leave
-		// on screen. Its own finally block also handles reconnecting
-		// _toolbarObserver, so nothing to do for that here.
-		_aborted = true;
-		_sessionRunning = false;
-		notifySessionState(false);
-		refreshToolbar();
-		hideToolbarError();
+		if (!sessionRunning) return;
+		aborted = true;
+		showProgress('Stopping after current step…');
 	}
 
-	// Announce initial (idle) state so alert-interceptor.js in the MAIN world
-	// doesn't have to rely solely on its own default if this script is ever
-	// re-injected mid-page-life (e.g. after an SPA navigation).
-	notifySessionState(_sessionRunning);
+	function setupToolbar() {
+		if (!isEntryPage()) {
+			document.getElementById('dgca-ext-toolbar')?.remove();
+			toolbarEls = null;
+			toolbarHeading = null;
+			return false;
+		}
+		if (toolbarHeading?.isConnected) {
+			if (!toolbarHeading.querySelector('#dgca-ext-toolbar')) buildToolbar(toolbarHeading);
+			return true;
+		}
+		const heading = findHeading();
+		if (!heading) return false;
+		toolbarHeading = heading;
+		if (!heading.querySelector('#dgca-ext-toolbar')) buildToolbar(heading);
+		refreshToolbar(true);
+		return true;
+	}
 
-	console.log('[DGCA Filler] Content script loaded on', window.location.href);
+	setupToolbar();
+
+	const root = document.getElementById('contWrapper') || document.body;
+	const observer = new MutationObserver(mutations => {
+		if (observerScheduled || sessionRunning) return;
+		let relevant = false;
+		if (toolbarHeading && !toolbarHeading.isConnected) relevant = true;
+		if (!relevant) {
+			for (const mutation of mutations) {
+				for (const node of mutation.addedNodes) {
+					if (node.nodeType !== 1) continue;
+					if (node.matches?.('.panel-heading,h5.panel-title,#dgca-ext-toolbar') || node.querySelector?.('.panel-heading,h5.panel-title,#dgca-ext-toolbar')) {
+						relevant = true;
+						break;
+					}
+				}
+				if (relevant) break;
+			}
+		}
+		if (!relevant) return;
+		observerScheduled = true;
+		const raf = fn => (typeof window.requestAnimationFrame === 'function'
+			? window.requestAnimationFrame(fn)
+			: setTimeout(fn, 16));
+		raf(() => {
+			try { setupToolbar(); }
+			finally { observerScheduled = false; }
+		});
+	});
+	observer.observe(root, { childList: true, subtree: true });
+
+	chrome.storage.local.onChanged.addListener(changes => {
+		if (changes.dgca_pending_rows || changes.dgca_queue_user || (changes.dgca_row_status && !sessionRunning)) {
+			refreshToolbar(true);
+		}
+	});
+
+	notifySessionState(false);
 })();
