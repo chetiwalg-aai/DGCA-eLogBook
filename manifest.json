@@ -4,19 +4,17 @@
   "version": "2.1.15",
   "description": "Parse data from AAI EGCAexport and assist in filling DGCA eLogBook entries",
   "browser_specific_settings": {
-    "gecko": {
-      "id": "egca-autofill@chetiwalg",
-      "strict_min_version": "128.0",
-      "data_collection_permissions": {
-        "required": [
-          "none"
-        ]
-      },
-      "android": {
-        "strict_min_version": "128.0"
-      }
-    }
-  },
+		"gecko": {
+			"id": "egca-autofill-selfhosted@chetiwalg",
+			"strict_min_version": "128.0",
+			"update_url": "https://raw.githubusercontent.com/chetiwalg-aai/DGCA-eLogBook/main/updates.json",
+			"data_collection_permissions": {
+				"required": [
+					"none"
+				]
+			}
+		}
+	},
   "permissions": [
     "activeTab",
     "scripting",
